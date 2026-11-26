@@ -15,6 +15,24 @@
       "description": "Administra tus agentes Pi Durable locales y conversa con ellos desde Orca.",
       "releases": [
         {
+          "version": "0.1.1",
+          "commit": "27476e381843447881f9d224afc25176f1411289",
+          "contentHash": "8783787e1b734c40e3713e0d6cea073d8e43fc3913a8dba39f33e1c919e4e97e",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.278",
+          "name": "Pi Durable",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "Pi Durable"
+            }
+          ],
+          "capabilities": [
+            "settings:own",
+            "storage:own"
+          ]
+        },
+        {
           "version": "0.1.0",
           "commit": "91687455cd21acf2f04ddecb1ca20c0ca9438209",
           "contentHash": "4283b81afc138764b5b961f1131ef6e08dcf54061ce26d50d6469ffafa58f01b",
