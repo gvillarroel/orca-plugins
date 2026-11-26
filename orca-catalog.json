@@ -12,8 +12,29 @@
         "ref": "main",
         "path": "plugins/pi-durable"
       },
-      "description": "Manage local Pi Durable agents and open them in the native Orca chat.",
+      "description": "Recruit, evolve and delete local Pi Durable agents and use them in native Orca chat.",
       "releases": [
+        {
+          "version": "0.3.0",
+          "commit": "6a192e03ced51c2b78ac76af7273d34af0b2162b",
+          "contentHash": "940410191f928c05e6ec38807cafd32aa490ca586484bba27ab09366d03cf915",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.278",
+          "name": "Pi Durable",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "Pi Durable"
+            }
+          ],
+          "capabilities": [
+            "settings:own",
+            "storage:own",
+            "workspace:read",
+            "agent:read",
+            "agent:launch"
+          ]
+        },
         {
           "version": "0.2.0",
           "commit": "5a02d25391a207a70ee14cc5d12761897dcf3451",
