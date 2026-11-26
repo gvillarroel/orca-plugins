@@ -1,6 +1,6 @@
 # Orca Plugins
 
-**Pi Durable** añade a Orca un panel en español para reclutar agentes de Pi Durable, editar sus instrucciones y conversar con ellos. Cada agente tiene un nombre visible, un ID estable y una conversación que puedes recuperar al reiniciar. Un servicio local guarda los agentes y sus conversaciones en SQLite. El panel también se puede conectar a servicios Pi Durable que ya tengas registrados.
+**Pi Durable** añade a Orca un panel en español para reclutar agentes, editar sus instrucciones y retomar su chat haciendo clic en el nombre. Los agentes administrados por el plugin tienen un ID estable y una conversación guardada en SQLite. También puedes abrir agentes de servicios locales que implementen la API de la consola Pi Durable v1.
 
 ## Instalar Pi Durable
 
@@ -9,7 +9,7 @@ Necesitas **Orca Desktop 1.4.278 o posterior**, **Node.js 24 o posterior**, npm 
 **1. Descarga e inicia el servicio.** En PowerShell o en una terminal:
 
 ```sh
-git clone --branch pi-durable-v0.1.0 https://github.com/gvillarroel/orca-plugins.git
+git clone --branch pi-durable-v0.1.1 https://github.com/gvillarroel/orca-plugins.git
 cd orca-plugins/runtime
 npm ci
 npm start
@@ -28,11 +28,23 @@ En el catálogo **Orca Plugins**, selecciona **Pi Durable → Install** y revisa
 
 **3. Prueba el primer chat.** Pulsa **Reclutar**, escribe un nombre, por ejemplo *Revisor*, y elige `demo` como modelo. Puedes fijar el ID `revisor` o dejar que el servicio asigne uno. Guarda el agente, escribe `Hola` y envía. El modelo de demostración devuelve un eco local. Vuelve al listado, selecciona el mismo agente y verás el intercambio anterior. **Editar** permite cambiar el nombre, las instrucciones y el modelo conservando el ID y el historial.
 
+### Actualizar desde 0.1.0
+
+Actualiza **Pi Durable** desde **Settings → Plugins**. Para actualizar también el servicio local, detenlo con **Ctrl+C** y ejecuta estos comandos desde la raíz de tu copia de `orca-plugins`. Los perfiles y el historial están en tu directorio de usuario y se vuelven a abrir al arrancar.
+
+```sh
+git fetch origin tag pi-durable-v0.1.1
+git switch --detach pi-durable-v0.1.1
+cd runtime
+npm ci
+npm start
+```
+
 ### Usar un modelo real
 
-Elige un ID del catálogo OpenAI o Anthropic que incluye la versión de Pi instalada. El proceso de `npm start` lee la clave del proveedor desde su entorno. Configura la variable con tu gestor de secretos o en esa misma terminal **antes de arrancar o reiniciar el servicio**. Con un proveedor remoto, el contexto de la conversación se envía al proveedor que elijas. El modo `demo` funciona sin claves ni solicitudes de inferencia.
+El selector ofrece `demo` y los modelos de la tabla para los que el servicio detecta una clave. Configura la variable en la terminal o con tu gestor de secretos **antes de arrancar o reiniciar el servicio**, y pulsa **Actualizar** en el panel. La aceptación de la clave y el acceso al modelo se comprueban al enviar un mensaje. Con un proveedor remoto, el contexto de la conversación se envía al proveedor que elijas.
 
-| Ejemplo en el campo Modelo | Variable del servicio |
+| Modelo | Variable del servicio |
 | --- | --- |
 | `openai/gpt-4.1-mini` | `OPENAI_API_KEY` |
 | `anthropic/claude-sonnet-4-6` | `ANTHROPIC_API_KEY` |
@@ -51,6 +63,18 @@ En **Settings → Plugins → Pi Durable**, establece **Registro externo** con l
 ```
 
 `configPath` se resuelve desde el directorio del archivo de conexiones. El servicio existente debe implementar la API de la consola Pi Durable v1 en `127.0.0.1` y conservar su `console-token` en su propio directorio de estado. Pulsa **Actualizar** en el panel. Los agentes externos aparecen con un ID como `external:equipo/revisor`. El panel lee su configuración y permite conversar cuando su servicio está activo. La edición de esos agentes corresponde a su servicio de origen. Para trabajar solo con servicios externos puedes omitir el paso 1.
+
+### Qué se ha comprobado
+
+| Requisito | Comprobación |
+| --- | --- |
+| Seleccionar al agente correcto | Dos agentes con el mismo nombre conservan IDs y chats independientes. Editar el nombre conserva el historial. |
+| Reintentar después de perder la confirmación | La misma solicitud de alta o de mensaje puede repetirse sin crear un segundo agente ni duplicar el turno. |
+| Recuperar el chat | Después de terminar el proceso con un mensaje ya admitido, abrir de nuevo SQLite permite completar el turno de demostración una sola vez. |
+| Leer historiales extensos | El panel indica cuándo muestra una vista parcial y conserva los mensajes más recientes. El servicio propietario conserva el historial. |
+| Conversar desde Orca | El recorrido de reclutar, enviar, editar y reabrir se comprueba en Orca Desktop para Windows. Las pruebas automatizadas de los adaptadores usan respuestas de prueba con el formato de cada proveedor. |
+
+El diseño toma dos requisitos de `disler/durable-pi`. El servicio conserva la conversación al salir del cliente y reconoce la operación original cuando el cliente la reintenta. Su servidor `dpi-backend` usa una API por dispositivo y sesión. La conexión externa descrita arriba requiere las rutas de la consola local, como `/v1/agents/<id>/chat`. [API de la implementación de referencia](https://github.com/disler/durable-pi/blob/37165c619573dbaf425463038bbffecfe576beec/apps/dpi-backend/API.md)
 
 ## Almacenamiento y solución de problemas
 
@@ -71,6 +95,8 @@ orca plugin validate plugins/pi-durable
 orca plugin check plugins/pi-durable
 orca plugin validate orca-catalog.json
 ```
+
+La regresión de la interfaz se ejecuta con `python tests/panel_browser.py` en un entorno de desarrollo con Python, Playwright y Chromium. Para usar Chrome instalado, establece `PLAYWRIGHT_CHANNEL=chrome`. La prueba reproduce en un navegador la pérdida de una confirmación de alta y la reapertura del panel, sin llamar a un proveedor.
 
 Para trabajar con una copia local, ejecuta `orca plugin dev load plugins/pi-durable` y sigue la revisión de permisos que presenta Orca. El ID de desarrollo es `local.pi-durable`. El ID de catálogo es `gvillarroel.pi-durable`.
 

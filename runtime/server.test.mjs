@@ -72,6 +72,12 @@ test('serves authenticated profiles and chats, unlinks its descriptor and rotate
   const created = await post(connection, 'agents.create', profile);
   assert.deepEqual(created, { status: 200, body: { ...profile, managed: true } });
   assert.deepEqual((await post(connection, 'agents.list', {})).body.agents, [created.body]);
+  const list = await post(connection, 'agents.list', { summary: true });
+  assert.equal(list.status, 200);
+  assert.deepEqual(list.body.agents, [{ id: profile.id, name: profile.name, model: 'demo', managed: true }]);
+  assert.ok(list.body.models.includes('demo'));
+  assert.deepEqual(await post(connection, 'agents.profile', { id: profile.id }), created);
+  assert.equal((await post(connection, 'agents.profile', { id: 'missing' })).status, 404);
   const input = { id: profile.id, text: 'hello over HTTP', requestId: 'first' };
   assert.deepEqual(await post(connection, 'chat.send', input), { status: 200, body: { accepted: true } });
   const deadline = Date.now() + 5000;

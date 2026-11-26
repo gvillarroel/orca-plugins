@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "pi-durable",
   "name": "Pi Durable",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "repository": "https://github.com/gvillarroel/orca-plugins",
   "description": "Recluta y configura agentes de Pi Durable, conversa con ellos y recupera el historial desde Orca.",

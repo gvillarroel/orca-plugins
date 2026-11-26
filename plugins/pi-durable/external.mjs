@@ -5,6 +5,9 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 const serviceId = /^[a-z][a-z0-9-]{0,63}$/;
 const maxConfig = 256 * 1024;
 const maxResponse = 2 * 1024 * 1024;
+// Reserve room in Orca's 1 MiB panel reply for the live partial and envelope.
+const maxMessageBytes = 160 * 1024;
+const maxMessages = 80;
 const validNumber = (n) => Number.isSafeInteger(n) && n > 0;
 const record = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -144,20 +147,25 @@ async function request(service, route, body, signal) {
     response.destroy();
     throw new Error('El servicio local respondió con HTTP ' + response.statusCode + '.');
   }
+  const oversized = 'La respuesta del servicio externo supera el límite de transferencia de 2 MiB.';
+  if (Number(response.headers['content-length']) > maxResponse) {
+    response.destroy();
+    throw new Error(oversized);
+  }
+  const chunks = [];
+  let length = 0;
   try {
-    requireValue(Number(response.headers['content-length'] ?? 0) <= maxResponse, 'Límite de respuesta.');
-    const chunks = [];
-    let length = 0;
     for await (const part of response) {
       length += part.length;
-      requireValue(length <= maxResponse, 'Límite de respuesta.');
+      if (length > maxResponse) break;
       chunks.push(part);
     }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
-    response.destroy();
-    throw new Error('La respuesta del servicio es inválida, está incompleta o supera 2 MiB.');
+    throw new Error('La transferencia desde el servicio externo quedó incompleta.');
   }
+  requireValue(length <= maxResponse, oversized);
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { throw new Error('El servicio externo devolvió JSON inválido.'); }
 }
 
 function profiles(service, rows, online) {
@@ -202,23 +210,40 @@ function failureMessage(reason) {
 function chatView(snapshot) {
   requireValue(validNumber(snapshot?.conversation?.id) && Array.isArray(snapshot.entries),
     'El servicio devolvió una conversación inválida.');
-  const messages = [];
+  const live = snapshot.docs?.['pi.live'];
+  const result = { conversationId: snapshot.conversation.id, messages: [], busy: !!live?.run };
+  function clip(text, limit) {
+    if (text.length <= limit) return text;
+    result.truncated = true;
+    const end = /[\uD800-\uDBFF]/.test(text[limit - 1]) ? limit - 1 : limit;
+    return text.slice(0, end) + '…';
+  }
   let last;
-  for (const entry of snapshot.entries) {
+  let bytes = 0;
+  entries: for (let i = snapshot.entries.length - 1; i >= 0; i--) {
+    const entry = snapshot.entries[i];
     if (!Array.isArray(entry?.model)) continue;
-    for (const message of entry.model) {
+    for (let j = entry.model.length - 1; j >= 0; j--) {
+      const message = entry.model[j];
       if (message?.role !== 'user' && message?.role !== 'assistant') continue;
-      last = message;
+      last ??= message;
       const text = publicText(message.content);
-      if (text.trim()) messages.push({ role: message.role, text });
+      if (!text.trim()) continue;
+      const row = { role: message.role, text: clip(text, 12000) };
+      const size = Buffer.byteLength(JSON.stringify(row)) + 1;
+      if (result.messages.length >= maxMessages || bytes + size > maxMessageBytes) {
+        result.truncated = true;
+        break entries;
+      }
+      result.messages.push(row);
+      bytes += size;
     }
   }
-  const live = snapshot.docs?.['pi.live'];
-  const result = { conversationId: snapshot.conversation.id, messages, busy: !!live?.run };
+  result.messages.reverse();
   const partial = live?.generation?.message;
   if (result.busy && partial?.role === 'assistant') {
     const text = publicText(partial.content);
-    if (text.trim()) result.liveText = text;
+    if (text.trim()) result.liveText = clip(text, 8000);
   }
   if (!result.busy && last?.role === 'assistant' && ['error', 'aborted'].includes(last.stopReason)) {
     result.error = last.stopReason === 'aborted' ? 'El turno fue cancelado.' : 'Falló la generación de la respuesta.';

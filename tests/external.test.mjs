@@ -186,3 +186,63 @@ test('invalid hosts and redirects never receive authentication; response diagnos
   assert.ok(!JSON.stringify(result).includes('owner-only diagnostic'));
   await assert.rejects(api.chat({ id: 'external:one/../v1' }), /inválido/);
 });
+
+test('large external transcripts fit Orca responses and retain the newest public messages', async t => {
+  const f = await files(t);
+  // JSON escapes expand the serialized byte size independently of character count.
+  const body = '\u0001'.repeat(3500);
+  const entries = Array.from({ length: 54 }, (_, i) => ({
+    id: i, model: [{ role: 'assistant', content: body + ' ' + i }]
+  }));
+  entries.push({ id: 54, model: [
+    { role: 'user', content: 'última pregunta' },
+    { role: 'assistant', content: 'última respuesta' }
+  ] });
+  let snapshot = { conversation: { id: 8 }, entries, docs: {} };
+  let chunked = false;
+  const port = await owner(t, (_req, res) => {
+    const data = JSON.stringify(snapshot);
+    if (chunked) {
+      res.write(data.slice(0, 24));
+      res.end(data.slice(24));
+    } else {
+      res.end(data);
+    }
+  });
+  const { config } = await f.service('service', port);
+  const file = await f.registry(join(f.root, 'connections.json'), [['one', config]]);
+  const api = createExternalRegistry({ connectionsFile: file });
+  const read = () => api.chat({ id: agentId });
+  assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) > 1024 * 1024);
+  const recent = await read();
+  assert.ok(Buffer.byteLength(JSON.stringify(recent)) < 256 * 1024);
+  assert.equal(recent.truncated, true);
+  assert.deepEqual(recent.messages.slice(-2), [
+    { role: 'user', text: 'última pregunta' }, { role: 'assistant', text: 'última respuesta' }
+  ]);
+  assert.ok(recent.messages.length < entries.length);
+  assert.ok(recent.messages.at(-3).text.endsWith(' 53'));
+
+  const large = 'x'.repeat(11999) + '💬'.repeat(800);
+  snapshot = { conversation: { id: 8 }, entries: [{ model: [{ role: 'user', content: large }] }],
+    docs: { 'pi.live': { run: {}, generation: { message: { role: 'assistant', content: large } } } } };
+  const partial = await read();
+  assert.equal(partial.truncated, true);
+  assert.ok(partial.messages[0].text.endsWith('…') && partial.messages[0].text.isWellFormed());
+  assert.ok(partial.liveText.length < large.length && partial.liveText.endsWith('…'));
+
+  snapshot.entries = Array.from({ length: 81 }, (_, i) => ({ model: [{ role: 'user', content: String(i) }] }));
+  snapshot.docs = {};
+  const many = await read();
+  assert.equal(many.truncated, true);
+  assert.equal(many.messages.length, 80);
+  assert.equal(many.messages[0].text, '1');
+  assert.equal(many.messages.at(-1).text, '80');
+  snapshot.entries.shift();
+  assert.ok(!(await read()).truncated);
+
+  snapshot.entries = [{ model: [{ role: 'assistant', content: 'z'.repeat(2 * 1024 * 1024) }] }];
+  await assert.rejects(read(), /supera.*2 MiB/);
+  chunked = true;
+  await assert.rejects(read(), /supera.*2 MiB/);
+});

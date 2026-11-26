@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
@@ -14,6 +14,7 @@ const rosterDoc = defineDoc({
   initial: () => ({ agents: [] }), checkpointWhen: () => false,
 });
 const keys = { openai: 'OPENAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY' };
+const supportedModels = ['demo', 'openai/gpt-4.1-mini', 'anthropic/claude-sonnet-4-6'];
 const CHAT_MESSAGE_LIMIT = 80;
 const CHAT_JSON_BYTES = 160 * 1024;
 
@@ -161,46 +162,85 @@ export async function openManager({ dataDir, env = process.env }) {
   }
 
   const profiles = async () => (await harness.snapshot(rosterDoc, root.id, context)) ?? { agents: [] };
+  function availableModels() {
+    return supportedModels.filter((model) => model === 'demo' || env[keys[model.split('/')[0]]]?.trim());
+  }
+  function newModel(model) {
+    if (!supportedModels.includes(model)) throw invalid('Select a supported model from the helper’s model list.');
+    const ref = modelRef(model, models);
+    if (model !== 'demo' && !env[keys[ref.provider]]?.trim()) {
+      throw invalid(`Set ${keys[ref.provider]} in the helper environment and restart it to select this model.`, 422);
+    }
+    return ref;
+  }
   const conversationFor = async (id) => {
     const { conversationId } = findProfile(await profiles(), id);
     return harness.conversation(conversationId, context);
   };
 
   return {
+    availableModels,
+
     async list() {
       return (await profiles()).agents.map(publicProfile);
     },
 
-    async create({ name, id, instructions = '', model = 'demo' }) {
-      if (id === undefined || id === '') id = randomUUID();
-      agentId(id);
+    async profile({ id }) {
+      return publicProfile(findProfile(await profiles(), id));
+    },
+
+    async create({ name, id, instructions = '', model = 'demo', requestId }) {
+      const requestedId = id === undefined || id === '' ? null : agentId(id);
       name = string(name, 'Name', 96).trim();
       string(instructions, 'Instructions', 16000, { empty: true });
-      const agent = { instructions, model: modelRef(model, models) };
-      // Write the profile and its conversation together, even on duplicate concurrent creates.
-      await harness.createConversation({
-        ownership: { kind: 'ownerless' }, agent,
-        init: async (tx, conversationId) => {
-          const roster = await tx.doc(rosterDoc, root.id);
-          if (roster.agents.some((p) => p.id === id)) throw invalid('This agent ID is already in use.', 409);
-          roster.agents.push({ id, name, instructions, model, conversationId });
-        },
+      string(model, 'Model', 160);
+      let fingerprint;
+      if (requestId !== undefined) {
+        string(requestId, 'Request ID', 160);
+        fingerprint = createHash('sha256').update(JSON.stringify([requestedId, name, instructions, model])).digest('hex');
+      }
+      // Read the receipt before generating an ID or writing anything. The same commit owns
+      // the receipt, metadata and conversation, including when concurrent HTTP calls retry.
+      return root.commit(async (tx) => {
+        const roster = await tx.doc(rosterDoc, root.id);
+        if (requestId !== undefined) {
+          const existing = roster.agents.find((item) => item.recruitment?.requestId === requestId);
+          if (existing) {
+            if (existing.recruitment.fingerprint !== fingerprint) throw invalid('This request ID was used for a different agent.', 409);
+            return publicProfile(existing);
+          }
+        }
+        const stableId = requestedId ?? randomUUID();
+        if (roster.agents.some((p) => p.id === stableId)) throw invalid('This agent ID is already in use.', 409);
+        const ref = newModel(model);
+        const conversation = await tx.createConversation({ ownership: { kind: 'ownerless' } });
+        await configure(tx, conversation.id, { instructions, model: ref });
+        const item = { id: stableId, name, instructions, model, conversationId: conversation.id };
+        if (requestId !== undefined) item.recruitment = { requestId, fingerprint };
+        roster.agents.push(item);
+        return publicProfile(item);
       }, context);
-      return publicProfile({ id, name, instructions, model });
     },
 
     async update({ id, name, instructions, model }) {
       return root.commit(async (tx) => {
         const profile = findProfile(await tx.doc(rosterDoc, root.id), id);
         if (name !== undefined) profile.name = string(name, 'Name', 96).trim();
-        if (instructions !== undefined || model !== undefined) {
+        const changeInstructions = instructions !== undefined && instructions !== profile.instructions;
+        const changeModel = model !== undefined && model !== profile.model;
+        if (changeInstructions || changeModel) {
           const live = await tx.doc(LiveDoc, profile.conversationId);
           if (live.run) throw invalid('Wait for the current reply before editing this agent.', 409);
-          if (instructions !== undefined) profile.instructions = string(instructions, 'Instructions', 16000, { empty: true });
-          if (model !== undefined) profile.model = model;
-          await configure(tx, profile.conversationId, {
-            instructions: profile.instructions, model: modelRef(profile.model, models),
-          });
+          const changes = {};
+          if (changeInstructions) {
+            profile.instructions = string(instructions, 'Instructions', 16000, { empty: true });
+            changes.instructions = profile.instructions;
+          }
+          if (changeModel) {
+            changes.model = newModel(model);
+            profile.model = model;
+          }
+          await configure(tx, profile.conversationId, changes);
         }
         return publicProfile(profile);
       }, context);

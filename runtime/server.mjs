@@ -8,7 +8,15 @@ import { openManager } from './manager.mjs';
 
 const host = '127.0.0.1';
 const methods = new Map([
-  ['agents.list', async manager => ({ agents: await manager.list() })],
+  ['agents.list', async (manager, { summary }) => {
+    const profiles = await manager.list();
+    if (!summary) return { agents: profiles };
+    return {
+      agents: profiles.map(({ id, name, model, managed }) => ({ id, name, model, managed })),
+      models: manager.availableModels(),
+    };
+  }],
+  ['agents.profile', (manager, params) => manager.profile(params)],
   ['agents.create', (manager, params) => manager.create(params)],
   ['agents.update', (manager, params) => manager.update(params)],
   ['chat.read', (manager, params) => manager.chat(params)],

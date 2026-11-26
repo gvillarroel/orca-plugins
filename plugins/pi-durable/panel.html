@@ -25,10 +25,10 @@
     h1, h2, p { margin: 0; }
     h1 { font-size: 18px; line-height: 1.3; letter-spacing: -.025em; }
     h2 { font-size: 15px; }
-    button, input, textarea { font: inherit; color: inherit; }
+    button, input, select, textarea { font: inherit; color: inherit; }
     button { cursor: pointer; }
     button:disabled { opacity: .56; cursor: default; }
-    button:focus-visible, input:focus-visible, textarea:focus-visible {
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
       outline: 2px solid var(--orca-ring, var(--primary)); outline-offset: 2px;
     }
     .button {
@@ -49,7 +49,7 @@
     .subtle, small { color: var(--subtle); }
     small { display: block; font-size: 12px; }
     code, .mono { font-family: var(--orca-font-mono, ui-monospace, monospace); font-size: .91em; }
-    input, textarea {
+    input, select, textarea {
       width: 100%; min-width: 0; border: 1px solid var(--orca-input, var(--edge));
       border-radius: var(--radius); padding: 7px 9px; background: var(--bg);
     }
@@ -102,7 +102,7 @@
   <section id="roster" aria-labelledby="roster-title">
     <header class="row">
       <h1 id="roster-title" tabindex="-1">Agentes</h1>
-      <button class="button primary" id="new" type="button">+ Reclutar</button>
+      <button class="button primary" id="new" type="button" disabled>+ Reclutar</button>
     </header>
     <label class="sr" for="filter">Buscar por nombre o ID</label>
     <input id="filter" type="search" placeholder="Buscar por nombre o ID" autocomplete="off">
@@ -116,14 +116,20 @@
     <button class="link back" id="profile-back" type="button">← Volver</button>
     <h1 id="profile-title" tabindex="-1">Reclutar agente</h1>
     <p class="notice" id="external-note" hidden>La configuración de este agente se administra en su servicio de origen.</p>
+    <p id="profile-loading" role="status" hidden></p>
+    <p class="notice" id="profile-error" role="alert" hidden></p>
+    <button class="link" id="retry-profile" type="button" hidden>Volver a cargar el perfil</button>
+    <div id="pending-create" hidden>
+      <p class="notice">Hay un alta pendiente de confirmación. Puedes reintentarlo con los mismos datos o preparar otro agente.</p>
+      <button class="link" id="discard-create" type="button">Preparar otro agente</button>
+    </div>
     <form id="profile-form">
       <div><label for="agent-name">Nombre</label><input id="agent-name" required maxlength="96" autocomplete="off"></div>
       <div><label for="agent-id">ID</label><input class="mono" id="agent-id" maxlength="64" pattern="[a-z0-9][a-z0-9\-]{0,63}" autocomplete="off" spellcheck="false" aria-describedby="id-hint">
         <small id="id-hint">Opcional. Usa minúsculas, números o guiones. Si lo dejas vacío, se genera al guardar.</small></div>
-      <div><label for="agent-model">Modelo</label><input class="mono" id="agent-model" required autocomplete="off" spellcheck="false" aria-describedby="model-hint">
-        <small id="model-hint"><code>demo</code> devuelve un eco local. Para usar un proveedor, elige un modelo configurado, como <code>openai/gpt-4.1-mini</code>.</small></div>
+      <div><label for="agent-model">Modelo</label><select class="mono" id="agent-model" required aria-describedby="model-hint"></select>
+        <small id="model-hint"><code>demo</code> devuelve un eco local.</small></div>
       <div><label for="agent-instructions">Instrucciones</label><textarea id="agent-instructions" rows="5" maxlength="16000" placeholder="Define su tarea y cómo debe responder."></textarea></div>
-      <p class="notice" id="profile-error" role="alert" hidden></p>
       <div><button class="button primary" id="save" type="submit">Reclutar agente</button></div>
     </form>
   </section>
@@ -157,11 +163,16 @@
   const sends = new Set();
   const pending = new Map();
   let agents = [];
+  let models = ['demo'];
+  let managedOnline = false;
   let active = null;
   let view = 'roster';
   let listVersion = 0;
   let hasList = false;
   let profileSaving = false;
+  let profileVersion = 0;
+  let createAttempt = null;
+  const createKeyPrefix = 'recruit-';
   let chatVersion = 0;
   let pollTimer;
   let history = null;
@@ -190,6 +201,7 @@
   function show(next) {
     clearTimeout(pollTimer);
     chatVersion++;
+    profileVersion++;
     view = next;
     for (const id of ['roster', 'profile', 'conversation']) $(id).hidden = id !== next;
   }
@@ -229,7 +241,8 @@
     $('count').textContent = term ? matches.length + ' de ' + agents.length :
       agents.length + (agents.length === 1 ? ' agente' : ' agentes');
     note('list-empty', !matches.length && hasList ?
-      (term ? 'No hay agentes que coincidan con la búsqueda.' : 'Todavía no hay agentes. Recluta el primero para empezar.') : '');
+      (term ? 'No hay agentes que coincidan con la búsqueda.' : managedOnline ?
+        'Todavía no hay agentes. Recluta el primero para empezar.' : 'No hay agentes disponibles.') : '');
   }
 
   async function loadList() {
@@ -237,13 +250,29 @@
     $('refresh').disabled = true;
     try {
       const result = await request('agents.list', {});
+      const collected = [...result.agents];
+      const cursors = new Set();
+      let cursor = result.nextCursor;
+      while (cursor && version === listVersion) {
+        if (cursors.has(cursor)) throw new Error('El servicio devolvió una página repetida.');
+        cursors.add(cursor);
+        const page = await request('agents.list', { cursor });
+        collected.push(...page.agents);
+        cursor = page.nextCursor;
+      }
       if (version !== listVersion) return;
-      agents = result.agents;
+      agents = collected;
+      managedOnline = result.managedOnline !== false;
+      models = [...new Set(['demo', ...(result.models || []).filter((model) => typeof model === 'string' && model)])];
+      $('new').disabled = !managedOnline;
       hasList = true;
       drawList();
-      note('list-warning', (result.warnings || []).join('\n'));
+      const notices = [...(result.warnings || [])];
+      if (!managedOnline) notices.unshift('Para reclutar agentes, inicia el servicio local y pulsa Actualizar.');
+      note('list-warning', notices.join('\n'));
     } catch (error) {
       if (version !== listVersion) return;
+      $('new').disabled = true;
       if (!hasList) $('count').textContent = 'Lista no disponible';
       note('list-warning', 'No se pudo actualizar la lista. ' + detail(error));
     } finally {
@@ -258,33 +287,108 @@
     loadList();
   }
 
-  function openProfile(agent) {
+  async function openProfile(agent) {
     active = agent;
     show('profile');
+    const version = profileVersion;
     const readOnly = !!agent && !agent.managed;
     const title = agent ? (readOnly ? 'Perfil del agente' : 'Editar agente') : 'Reclutar agente';
     $('profile-title').textContent = title;
     $('profile-title').focus();
     $('profile-back').textContent = agent ? '← Conversación' : '← Agentes';
-    $('agent-name').value = agent?.name || '';
-    $('agent-id').value = agent?.id || '';
-    $('agent-model').value = agent ? (agent.model || '') : 'demo';
-    $('agent-instructions').value = agent?.instructions || '';
+    $('profile-form').hidden = true;
+    $('pending-create').hidden = true;
+    $('retry-profile').hidden = true;
+    note('profile-error', '');
+    note('profile-loading', 'Cargando perfil…');
+    try {
+      let fields = agent;
+      if (agent?.managed) {
+        fields = await request('agents.profile', { id: agent.id });
+        if (!fields || fields.id !== agent.id || typeof fields.instructions !== 'string') {
+          throw new Error('El servicio devolvió un perfil incompleto. Actualiza el servicio local.');
+        }
+      } else if (!agent) {
+        const storage = window.orca.storage;
+        const keys = (await storage.keys()).filter(key => key.startsWith(createKeyPrefix)).sort();
+        const saved = keys.length ? await storage.get(keys.at(-1)) : null;
+        if (version !== profileVersion) return;
+        createAttempt = saved;
+        fields = saved?.fields;
+      }
+      if (version !== profileVersion) return;
+      drawProfile(agent, fields || {}, readOnly);
+    } catch (error) {
+      if (version !== profileVersion) return;
+      note('profile-error', 'No se pudo cargar el perfil. ' + detail(error));
+      $('retry-profile').hidden = false;
+    } finally {
+      if (version === profileVersion) note('profile-loading', '');
+    }
+  }
+
+  function drawProfile(agent, fields, readOnly) {
+    $('agent-name').value = fields.name || '';
+    $('agent-id').value = fields.id || '';
+    $('agent-instructions').value = fields.instructions || '';
+    const selected = fields.model || (readOnly ? '' : 'demo');
+    const choices = readOnly ? [] : [...models];
+    if (agent && !choices.includes(selected)) choices.push(selected);
+    $('agent-model').replaceChildren(...choices.map(model => {
+      const label = !model ? 'Modelo no compartido' : !readOnly && !models.includes(model) ? model + ' (guardado)' : model;
+      return new Option(label, model);
+    }));
+    $('agent-model').value = selected;
+    $('agent-model').disabled = readOnly;
     $('agent-id').readOnly = !!agent;
     $('id-hint').hidden = !!agent;
     $('model-hint').hidden = readOnly;
     $('external-note').hidden = !readOnly;
-    for (const field of ['agent-name', 'agent-model', 'agent-instructions']) $(field).readOnly = readOnly;
+    for (const field of ['agent-name', 'agent-instructions']) $(field).readOnly = readOnly;
     $('agent-instructions').placeholder = readOnly ? 'El servicio no compartió instrucciones.' : 'Define su tarea y cómo debe responder.';
-    $('agent-model').placeholder = readOnly ? 'El servicio no compartió un modelo.' : '';
     $('save').hidden = readOnly;
-    $('save').textContent = agent ? 'Guardar cambios' : title;
+    $('save').textContent = agent ? 'Guardar cambios' : 'Reclutar agente';
     note('profile-error', '');
+    $('pending-create').hidden = !!agent || !createAttempt;
+    $('profile-form').hidden = false;
+  }
+
+  async function prepareCreate(fields) {
+    if (createAttempt && ['id', 'name', 'model', 'instructions'].every(
+      key => createAttempt.fields[key] === fields[key])) return createAttempt;
+    const nonce = requestId();
+    const next = {
+      key: createKeyPrefix + Date.now() + '-' + nonce, fields,
+      id: fields.id || 'agente-' + nonce, requestId: nonce
+    };
+    // Record the operation before sending. A lost reply or closed frame can reopen the same intent.
+    await window.orca.storage.set(next.key, next);
+    const previous = createAttempt;
+    createAttempt = next;
+    if (previous) await window.orca.storage.delete(previous.key);
+    return next;
+  }
+
+  async function discardCreate() {
+    if (!createAttempt || profileSaving) return;
+    const version = profileVersion;
+    $('discard-create').disabled = $('save').disabled = true;
+    try {
+      await window.orca.storage.delete(createAttempt.key);
+      if (version !== profileVersion) return;
+      createAttempt = null;
+      drawProfile(null, {}, false);
+      $('agent-name').focus();
+    } catch (error) {
+      if (version === profileVersion) note('profile-error', 'No se pudo descartar el reintento. ' + detail(error));
+    } finally {
+      $('discard-create').disabled = $('save').disabled = false;
+    }
   }
 
   async function saveProfile(event) {
     event.preventDefault();
-    if (profileSaving || active && !active.managed) return;
+    if (profileSaving || $('profile-form').hidden || active && !active.managed) return;
     const name = $('agent-name').value.trim();
     const model = $('agent-model').value.trim();
     if (!name || !model) {
@@ -297,17 +401,26 @@
     if (id) data.id = id;
     profileSaving = true;
     $('profile-form').setAttribute('aria-busy', 'true');
-    $('profile-back').disabled = $('save').disabled = true;
+    $('profile-back').disabled = $('save').disabled = $('discard-create').disabled = true;
     note('profile-error', '');
     try {
-      const agent = await request(active ? 'agents.update' : 'agents.create', data);
+      let agent;
+      if (active) {
+        agent = await request('agents.update', data);
+      } else {
+        const attempt = await prepareCreate(data);
+        agent = await request('agents.create', { ...data, id: attempt.id, requestId: attempt.requestId });
+        await window.orca.storage.delete(attempt.key);
+        createAttempt = null;
+      }
       openChat(agent);
     } catch (error) {
       note('profile-error', 'No se pudo guardar el agente. ' + detail(error));
+      $('pending-create').hidden = !!active || !createAttempt;
     } finally {
       profileSaving = false;
       $('profile-form').removeAttribute('aria-busy');
-      $('profile-back').disabled = $('save').disabled = false;
+      $('profile-back').disabled = $('save').disabled = $('discard-create').disabled = false;
     }
   }
 
@@ -457,6 +570,8 @@
   $('refresh').addEventListener('click', loadList);
   $('profile-back').addEventListener('click', () => active ? openChat(active) : openList());
   $('profile-form').addEventListener('submit', saveProfile);
+  $('discard-create').addEventListener('click', discardCreate);
+  $('retry-profile').addEventListener('click', () => openProfile(active));
   $('chat-back').addEventListener('click', openList);
   $('edit').addEventListener('click', () => openProfile(active));
   $('retry-read').addEventListener('click', readChat);
