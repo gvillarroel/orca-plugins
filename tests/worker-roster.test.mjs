@@ -1,8 +1,51 @@
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
-import { createRosterHandler } from '../plugins/pi-durable/worker.mjs';
+import activate, { createRosterHandler } from '../plugins/pi-durable/worker.mjs';
 
 const context = id => ({ panel: { id, surface: 'panel', contributionId: 'agents' }, signal: new AbortController().signal });
+
+test('management capability stays JSON-safe for older and offline local services', async t => {
+  const temp = await mkdtemp(join(tmpdir(), 'orca-worker-test-'));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const variable = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
+  const previous = process.env[variable];
+  process.env[variable] = temp;
+  t.after(() => {
+    if (previous === undefined) delete process.env[variable];
+    else process.env[variable] = previous;
+  });
+  const directory = join(temp, '.pi-durable-orca');
+  await mkdir(directory);
+  await writeFile(join(directory, 'connection.json'), JSON.stringify({ port: 1234, token: '0'.repeat(64) }));
+  const connectionsFile = join(temp, 'registry.json');
+  await writeFile(connectionsFile, JSON.stringify({ version: 1, services: [] }));
+  const handlers = new Map();
+  activate({ panels: { handle: (name, handler) => handlers.set(name, handler) },
+    host: { call: async () => ({ settings: { connectionsFile } }) } });
+  let response = { agents: [], models: ['demo'] };
+  t.mock.method(globalThis, 'fetch', async () => {
+    if (!response) throw new Error('offline');
+    return Response.json(response);
+  });
+  const list = () => handlers.get('agents.list')({}, context('worker-test'));
+  const check = async (online, version) => {
+    const page = await list();
+    assert.equal(page.managementVersion, version);
+    assert.equal(page.managedOnline, online);
+    assert.deepEqual(page, JSON.parse(JSON.stringify(page)));
+  };
+  await check(true, 0);
+  response.managementVersion = 1;
+  await check(true, 1);
+  response = null;
+  await check(false, 0);
+  for (const name of ['agents.delete', 'evolution.get', 'evolution.propose', 'evolution.apply', 'evolution.rollback']) {
+    await assert.rejects(handlers.get(name)({ id: 'external:some/agent' }, context('worker-test')), /service that manages/);
+  }
+});
 
 test('pages compact agent summaries in stable order within the Orca bridge limit', async () => {
   const oversized = '\u0001'.repeat(260) + '😀'.repeat(900);

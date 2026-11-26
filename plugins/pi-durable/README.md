@@ -18,7 +18,7 @@ The native chat setup was tested with Orca Desktop **1.4.278** for Windows, Node
 2. Download the release, register its local provider with Pi, and start the service.
 
    ```sh
-   git clone --branch pi-durable-v0.2.0 https://github.com/gvillarroel/orca-plugins.git
+   git clone --branch pi-durable-v0.3.0 https://github.com/gvillarroel/orca-plugins.git
    cd orca-plugins
    pi install ./integrations/pi-durable-provider
    cd runtime
@@ -38,13 +38,13 @@ The roster lists the agent’s display name and ID. The first selection creates 
 
 Use **Details → Edit** to change the name, instructions or backing model while retaining the ID and saved turns. **Details** also shows messages from the native tab and earlier sidebar conversations. The Orca tab displays the exchanges recorded in that native session. This matters when opening an existing agent in native chat for the first time or when working in another workspace.
 
-### Upgrade from 0.1.x
+### Upgrade an existing installation
 
 Stop the local service, then run the following commands from the root of its checkout. Update Pi Durable from Orca’s **Settings → Plugins** and review its workspace and agent permissions.
 
 ```sh
-git fetch origin tag pi-durable-v0.2.0
-git switch --detach pi-durable-v0.2.0
+git fetch origin tag pi-durable-v0.3.0
+git switch --detach pi-durable-v0.3.0
 pi install ./integrations/pi-durable-provider
 cd runtime
 npm ci
@@ -52,6 +52,26 @@ npm start
 ```
 
 The service reopens the existing database in your home directory.
+
+### Evolve a local agent
+
+1. Open the agent's **Details → Evolve**. Enter the new requirement. For an offline example, choose the **demo** builder and enter `When I say "status", reply "ready"`.
+2. Optionally expand **Add an example**. Enter `status` as the message and `ready` as the expected reply. Click **Generate proposal**. You can leave the panel and return to the pending request.
+3. Inspect **Proposed script** and **Passed checks**. A separate Pi Durable conversation writes the agent's JavaScript function. The service runs the proposed code with your example, the author's examples, saved checks and unrelated control messages. A failed proposal leaves the active revision in place.
+4. Click **Apply change**. Send `status` in the agent's existing native Pi Chat tab. You should receive `ready`. The selected agent keeps its ID and conversation. SQLite stores the active script and its checks across restarts.
+5. To undo the most recent application, expand **Active script** and click **Restore previous script**. New messages use the restored behavior. Replies already in the transcript keep their original text.
+
+The builder model can differ from the agent's chat model. The offline builder supports exact-phrase replies in English and Spanish and a word-count command such as `Add a /words command that counts words.` For other requirements, select a configured OpenAI or Anthropic builder. That provider receives the requirement, the current function and the examples, and may charge for generation. The author's conversation is separate from the target agent's chat history.
+
+Each script implements `respond(text)`. It can return a reply or return `null` to pass the message to the agent's normal model and tools. The local service evaluates the script in an isolated QuickJS interpreter with time and memory limits. Requirements must be implementable from the input text. Filesystem operations, network requests and package installation are outside this interface. Messages with images follow the native model path.
+
+![Wordsmith in Orca showing its original echo, a word count of 3 after applying the change, and a fresh count of 4 after restarting. The active JavaScript is visible alongside the chat.](../../docs/pi-durable/evolution/03-evolved-native-chat.png)
+
+The desktop run started with the original agent and verified the proposal before applying it. [Original chat](../../docs/pi-durable/evolution/01-before-evolution.png) · [Verified proposal](../../docs/pi-durable/evolution/02-verified-proposal.png)
+
+### Delete a local agent
+
+Open **Details → Edit → Delete agent…**, verify the name and stable ID, then confirm **Delete agent**. Wait for any active conversation turn or evolution to finish first. The agent disappears from the roster and its old tabs stop accepting messages. Its ID stays reserved so a saved tab cannot accidentally reach another agent. Deletion retires the profile. Existing records remain in Pi Durable's SQLite log and in Orca's session transcripts. External agents are managed by the service that registered them. [Deletion confirmation](../../docs/pi-durable/evolution/04-delete-confirmation.png) · [Surviving agent and its conversation](../../docs/pi-durable/evolution/05-control-after-deletion.png)
 
 ### Choose a model
 

@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 const execute = promisify(execFile);
 const agentId = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const sessionId = /^[a-z0-9-]{1,100}$/i;
-const installProvider = 'Run pi install ./integrations/pi-durable-provider from the 0.2.0 checkout, start the matching local service, and try again.';
+const installProvider = 'Run pi install ./integrations/pi-durable-provider from the matching release checkout, start the matching local service, and try again.';
 
 function commandsEnvironment() {
   const env = { ...process.env, NO_COLOR: '1' };

@@ -45,6 +45,8 @@
       text-align: left; white-space: normal;
     }
     .link:hover:enabled { color: var(--fg); text-decoration: underline; }
+    .danger { color: var(--orca-destructive, light-dark(#aa2727, #ff9b9b)); }
+    .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
     .row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
     .subtle, small { color: var(--subtle); }
     small { display: block; font-size: 12px; }
@@ -77,6 +79,13 @@
     .back { margin-bottom: 8px; }
     #profile-form { display: grid; gap: 13px; margin-top: 16px; }
     #profile-form small { margin-top: 3px; }
+    #evolution-form, #candidate { display: grid; gap: 10px; margin-top: 16px; }
+    #evolution details { margin-top: 10px; }
+    #evolution summary { cursor: pointer; font-weight: 600; }
+    #evolution pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px; background: var(--surface); border-radius: var(--radius); }
+    #checks { margin: 0; padding-left: 20px; }
+    #checks li { margin-block: 4px; white-space: pre-wrap; }
+    #delete-confirm p { margin: 10px 0; }
     #conversation { display: flex; flex-direction: column; flex: 1; overflow: hidden; padding: 0; }
     .chat-head { padding: 10px 14px; border-bottom: 1px solid var(--edge); flex: none; }
     .chat-head .back { margin-bottom: 4px; }
@@ -134,14 +143,59 @@
       <div><label for="agent-model">Model</label><select class="mono" id="agent-model" required aria-describedby="model-hint"></select>
         <small id="model-hint"><code>demo</code> echoes your message locally.</small></div>
       <div><label for="agent-instructions">Instructions</label><textarea id="agent-instructions" rows="5" maxlength="16000" placeholder="Describe the task and how the agent should respond."></textarea></div>
-      <div><button class="button primary" id="save" type="submit">Recruit agent</button></div>
+      <div class="row"><button class="button primary" id="save" type="submit">Recruit agent</button>
+        <button class="link danger" id="delete" type="button" hidden>Delete agent…</button></div>
     </form>
+  </section>
+
+  <section id="delete-confirm" aria-labelledby="delete-title" hidden>
+    <h1 id="delete-title">Delete agent?</h1>
+    <p id="delete-target"></p>
+    <p>The local service will stop accepting messages for this ID and remove the agent from your roster. Orca keeps its existing chat transcripts. This ID cannot be reused.</p>
+    <div class="actions"><button class="button" type="button" id="delete-cancel">Cancel</button>
+      <button class="button danger" type="button" id="delete-yes">Delete agent</button></div>
+    <p class="notice" id="delete-error" role="alert" hidden></p>
+  </section>
+
+  <section id="evolution" aria-labelledby="evolution-title" hidden>
+    <button class="link back" id="evolution-back" type="button">← Conversation</button>
+    <h1 id="evolution-title" tabindex="-1">Evolve agent</h1>
+    <small id="evolution-target"></small>
+    <p class="notice" id="evolution-status" role="status" hidden></p>
+    <p class="notice" id="evolution-error" role="alert" hidden></p>
+    <button class="link" type="button" id="evolution-reload" hidden>Reload evolution</button>
+    <details id="active-script" hidden>
+      <summary id="active-label">Active script</summary>
+      <pre><code id="active-source"></code></pre>
+      <button class="button" id="rollback" type="button" hidden>Restore previous script</button>
+    </details>
+    <form id="evolution-form" hidden>
+      <div><label for="requirement">New requirement</label>
+        <textarea id="requirement" rows="3" required maxlength="3000" placeholder="What should this agent do?"></textarea></div>
+      <div><label for="builder-model">Builder model</label><select id="builder-model" required></select>
+        <small id="demo-example" hidden>Try “Add a /words command that counts words.”</small></div>
+      <details id="acceptance-example"><summary>Add an example</summary>
+        <label for="example-input">Message</label><textarea id="example-input" rows="2" maxlength="1000"></textarea>
+        <label for="example-reply">Expected reply</label><textarea id="example-reply" rows="2" maxlength="1000"></textarea>
+      </details>
+      <div><button class="button primary" type="submit" id="propose">Generate proposal</button></div>
+    </form>
+    <div id="candidate" hidden>
+      <h2>Proposed change</h2>
+      <p id="proposal-requirement"></p>
+      <small id="proposal-builder"></small>
+      <details id="candidate-script"><summary>Proposed script</summary><pre><code id="candidate-source"></code></pre></details>
+      <div><strong>Passed checks</strong><ul id="checks"></ul></div>
+      <div><button class="button primary" type="button" id="apply">Apply change</button></div>
+    </div>
   </section>
 
   <section id="conversation" aria-labelledby="chat-title" hidden>
     <header class="chat-head">
       <button class="link back" id="chat-back" type="button">← Agents</button>
-      <div class="row"><h1 id="chat-title" tabindex="-1"></h1><button class="button" id="edit" type="button">Edit</button></div>
+      <div class="row"><h1 id="chat-title" tabindex="-1"></h1>
+        <div class="actions"><button class="button" id="evolve" type="button" hidden>Evolve</button>
+          <button class="button" id="edit" type="button">Edit</button></div></div>
       <small id="chat-id" class="mono"></small>
     </header>
     <p class="notice" id="launch-error" role="status" hidden></p>
@@ -170,6 +224,7 @@
   let agents = [];
   let models = ['demo'];
   let managedOnline = false;
+  let canManage = false;
   let active = null;
   let view = 'roster';
   let listVersion = 0;
@@ -184,6 +239,11 @@
   let pollTimer;
   let history = null;
   let historyError = '';
+  let evolution = null;
+  let evolutionVersion = 0;
+  const evolutionDrafts = new Map();
+  const evolutionIntents = new Map();
+  const evolutionKey = id => 'evolve-' + id;
   let messageSignature;
   const utf8 = new TextEncoder();
 
@@ -213,7 +273,8 @@
     chatVersion++;
     profileVersion++;
     view = next;
-    for (const id of ['roster', 'profile', 'conversation']) $(id).hidden = id !== next;
+    evolutionVersion++;
+    for (const id of ['roster', 'profile', 'conversation', 'delete-confirm', 'evolution']) $(id).hidden = id !== next;
   }
 
   function addText(parent, tag, value, style) {
@@ -279,6 +340,7 @@
       if (version !== listVersion) return;
       agents = collected;
       managedOnline = result.managedOnline !== false;
+      canManage = result.managementVersion === 1 && managedOnline;
       models = [...new Set(['demo', ...(result.models || []).filter((model) => typeof model === 'string' && model)])];
       $('new').disabled = !managedOnline;
       hasList = true;
@@ -364,6 +426,7 @@
     for (const field of ['agent-name', 'agent-instructions']) $(field).readOnly = readOnly;
     $('agent-instructions').placeholder = readOnly ? 'The service did not provide instructions.' : 'Describe the task and how the agent should respond.';
     $('save').hidden = readOnly;
+    $('delete').hidden = !canManage || !agent?.managed;
     $('save').textContent = agent ? 'Save changes' : 'Recruit agent';
     note('profile-error', '');
     $('pending-create').hidden = !!agent || !createAttempt;
@@ -418,7 +481,7 @@
     if (id) data.id = id;
     profileSaving = true;
     $('profile-form').setAttribute('aria-busy', 'true');
-    $('profile-back').disabled = $('save').disabled = $('discard-create').disabled = true;
+    $('profile-back').disabled = $('save').disabled = $('delete').disabled = $('discard-create').disabled = true;
     note('profile-error', '');
     try {
       let agent;
@@ -441,7 +504,7 @@
     } finally {
       profileSaving = false;
       $('profile-form').removeAttribute('aria-busy');
-      $('profile-back').disabled = $('save').disabled = $('discard-create').disabled = false;
+      $('profile-back').disabled = $('save').disabled = $('delete').disabled = $('discard-create').disabled = false;
     }
   }
 
@@ -465,6 +528,189 @@
       if (value) sessionStorage.setItem(key, JSON.stringify(value));
       else sessionStorage.removeItem(key);
     } catch { /* The in-memory copy remains valid while the panel is open. */ }
+  }
+
+  function confirmDeletion() {
+    if (!canManage || !active?.managed || profileSaving) return;
+    show('delete-confirm');
+    $('delete-target').textContent = active.name + ' · ' + active.id;
+    note('delete-error', '');
+    $('delete-cancel').focus();
+  }
+
+  async function deleteAgent() {
+    if (view !== 'delete-confirm' || !active?.managed || $('delete-yes').disabled) return;
+    const id = active.id;
+    $('delete-yes').disabled = $('delete-cancel').disabled = true;
+    note('delete-error', '');
+    try {
+      // A managed ID is retired forever. Reconfirming after a lost reply retries the same deletion.
+      const result = await request('agents.delete', { id, requestId: 'delete-' + id });
+      if (result?.id !== id || result.deleted !== true) throw new Error('The service did not confirm deletion.');
+      setPending(id, null);
+      drafts.delete(id);
+      evolutionDrafts.delete(id);
+      evolutionIntents.delete(id);
+      // Deletion is complete even if the panel's local draft store is unavailable.
+      try { await window.orca.storage.delete(evolutionKey(id)); } catch {}
+      agents = agents.filter(agent => agent.id !== id);
+      drawList();
+      openList();
+      note('launch-status', 'Deleted ' + id + '.');
+    } catch (error) {
+      note('delete-error', detail(error));
+    } finally {
+      $('delete-yes').disabled = $('delete-cancel').disabled = false;
+    }
+  }
+
+  function setEvolutionBusy(busy) {
+    for (const id of ['propose', 'requirement', 'builder-model', 'example-input', 'example-reply', 'apply', 'rollback']) {
+      $(id).disabled = busy;
+    }
+  }
+
+  function drawEvolution(result, message) {
+    evolution = result;
+    const { revision, source, proposal, job } = result;
+    const running = job?.status === 'running';
+    $('active-script').hidden = false;
+    $('active-label').textContent = 'Active script · revision ' + revision;
+    $('active-source').textContent = source;
+    $('rollback').hidden = !result.canRollback;
+    $('evolution-form').hidden = false;
+    $('candidate').hidden = !proposal || running;
+    $('evolution-reload').hidden = true;
+    if (proposal && !running) {
+      $('proposal-requirement').textContent = proposal.requirement;
+      $('proposal-builder').textContent = 'Built by ' + proposal.builder + ' from revision ' + proposal.baseRevision;
+      $('candidate-source').textContent = proposal.source;
+      const checks = proposal.checks.map(check => {
+        const item = document.createElement('li');
+        addText(item, 'code', check.input);
+        item.append(' → ');
+        addText(item, 'code', check.expected === null ? 'Continue normal chat' : check.expected);
+        return item;
+      });
+      $('checks').replaceChildren(...checks);
+    }
+    note('evolution-status', running ? 'Generating and testing the proposed script…' : message);
+    note('evolution-error', job?.status === 'failed' ? job.error || 'The builder could not complete this change.' : '');
+    setEvolutionBusy(running);
+    $('propose').textContent = job?.status === 'failed' ? 'Try again' : 'Generate proposal';
+    if (job || proposal) {
+      if ([job?.requestId, proposal?.requestId].includes(evolutionIntents.get(active.id)?.requestId)) {
+        evolutionIntents.delete(active.id);
+      }
+    }
+    if (running) pollTimer = setTimeout(() => refreshEvolution(), 900);
+  }
+
+  async function refreshEvolution() {
+    clearTimeout(pollTimer);
+    const version = ++evolutionVersion;
+    const id = active.id;
+    try {
+      const [result, saved] = await Promise.all([
+        request('evolution.get', { id }),
+        evolution ? null : window.orca.storage.get(evolutionKey(id)),
+      ]);
+      if (version !== evolutionVersion) return;
+      if (!evolution) {
+        const matchesRevision = saved?.revision === result.revision;
+        if (matchesRevision && ![result.job?.requestId, result.proposal?.requestId].includes(saved.requestId)) {
+          evolutionIntents.set(id, saved);
+        }
+        const draft = evolutionDrafts.get(id);
+        $('requirement').value = draft?.text ?? result.job?.requirement ?? evolutionIntents.get(id)?.requirement ?? '';
+        const selected = draft?.model || (matchesRevision && saved.builderModel) || result.model;
+        $('builder-model').value = models.includes(selected) ? selected : 'demo';
+        const example = draft?.example ?? (matchesRevision && saved.acceptance?.[0]);
+        $('example-input').value = example?.input ?? '';
+        $('example-reply').value = example?.expected ?? '';
+        $('acceptance-example').open = !!($('example-input').value || $('example-reply').value);
+      }
+      $('demo-example').hidden = $('builder-model').value !== 'demo';
+      drawEvolution(result, result.proposal ? 'The proposed script is ready for review.' : '');
+    } catch (error) {
+      if (version !== evolutionVersion) return;
+      note('evolution-status', '');
+      note('evolution-error', 'Could not load this evolution. ' + detail(error));
+      $('evolution-reload').hidden = false;
+      setEvolutionBusy(true);
+    }
+  }
+
+  function openEvolution() {
+    if (!active?.managed || !canManage) return;
+    show('evolution');
+    evolution = null;
+    $('evolution-target').textContent = active.name + ' · ' + active.id;
+    $('evolution-title').focus();
+    $('active-script').open = $('candidate-script').open = false;
+    for (const id of ['evolution-form', 'active-script', 'candidate', 'evolution-reload']) $(id).hidden = true;
+    $('builder-model').replaceChildren(...models.map(name => new Option(name, name)));
+    note('evolution-status', 'Loading active script…');
+    note('evolution-error', '');
+    refreshEvolution();
+  }
+
+  async function changeEvolution(action) {
+    if (view !== 'evolution' || !evolution || $(action).disabled) return;
+    const id = active.id;
+    const version = ++evolutionVersion;
+    const params = { id };
+    if (action === 'propose') {
+      const requirement = $('requirement').value.trim();
+      if (!requirement) { $('requirement').focus(); return; }
+      const builderModel = $('builder-model').value;
+      const input = $('example-input').value, expected = $('example-reply').value;
+      if ((input || expected) && (!input.trim() || !expected.trim())) {
+        note('evolution-error', 'Complete both fields in the example, or clear them to continue.');
+        $('acceptance-example').open = true;
+        $(input.trim() ? 'example-reply' : 'example-input').focus();
+        return;
+      }
+      // Keep the same admission ID if the service accepted a proposal but the reply was lost.
+      const previous = evolutionIntents.get(id);
+      const oldExample = previous?.acceptance?.[0];
+      const intent = previous?.requirement === requirement && previous.builderModel === builderModel &&
+        previous.revision === evolution.revision && input === (oldExample?.input ?? '') &&
+        expected === (oldExample?.expected ?? '') ? previous :
+        { requirement, builderModel, requestId: requestId(), revision: evolution.revision,
+          acceptance: input ? [{ input, expected }] : [] };
+      evolutionIntents.set(id, intent);
+      Object.assign(params, { requirement, builderModel, requestId: intent.requestId });
+      if (input) params.acceptance = intent.acceptance;
+    } else if (action === 'apply') {
+      if (!evolution.proposal) return;
+      Object.assign(params, { requestId: evolution.proposal.requestId, baseRevision: evolution.proposal.baseRevision });
+    } else {
+      params.revision = evolution.revision;
+    }
+    clearTimeout(pollTimer);
+    setEvolutionBusy(true);
+    note('evolution-error', '');
+    note('evolution-status', action === 'propose' ? 'Sending requirement…' : 'Updating the active script…');
+    try {
+      if (action === 'propose') await window.orca.storage.set(evolutionKey(id), evolutionIntents.get(id));
+      const result = await request('evolution.' + action, params);
+      if (version !== evolutionVersion) return;
+      if (action === 'apply' || action === 'rollback') {
+        evolutionDrafts.delete(id);
+        $('requirement').value = '';
+        $('example-input').value = $('example-reply').value = '';
+        $('acceptance-example').open = false;
+      }
+      drawEvolution(result, action === 'propose' ? 'The proposed script is ready for review.' :
+        'Revision ' + result.revision + ' is now active.');
+    } catch (error) {
+      if (version !== evolutionVersion) return;
+      note('evolution-status', '');
+      note('evolution-error', detail(error));
+      $('evolution-reload').hidden = false;
+      setEvolutionBusy(false);
+    }
   }
 
   async function selectAgent(agent, reviewId) {
@@ -499,6 +745,7 @@
     $('chat-title').textContent = agent.name || agent.id;
     $('chat-id').textContent = agent.id + ' · ' + (agent.managed ? 'Managed' : 'External');
     $('edit').textContent = agent.managed ? 'Edit' : 'View profile';
+    $('evolve').hidden = !agent.managed || !canManage;
     $('prompt').value = pendingFor(agent.id)?.text || drafts.get(agent.id) || '';
     $('chat-title').focus();
     drawChat();
@@ -621,6 +868,23 @@
     if (launchReview) selectAgent(launchReview.agent, launchReview.reviewId);
   });
   $('edit').addEventListener('click', () => openProfile(active));
+  $('delete').addEventListener('click', confirmDeletion);
+  $('delete-cancel').addEventListener('click', () => openProfile(active));
+  $('delete-yes').addEventListener('click', deleteAgent);
+  $('evolve').addEventListener('click', openEvolution);
+  $('evolution-back').addEventListener('click', () => openChat(active));
+  $('evolution-reload').addEventListener('click', refreshEvolution);
+  function saveEvolutionDraft() {
+    evolutionDrafts.set(active.id, { text: $('requirement').value, model: $('builder-model').value,
+      example: { input: $('example-input').value, expected: $('example-reply').value } });
+    $('demo-example').hidden = $('builder-model').value !== 'demo';
+  }
+  $('requirement').addEventListener('input', saveEvolutionDraft);
+  $('builder-model').addEventListener('change', saveEvolutionDraft);
+  for (const id of ['example-input', 'example-reply']) $(id).addEventListener('input', saveEvolutionDraft);
+  $('evolution-form').addEventListener('submit', event => { event.preventDefault(); changeEvolution('propose'); });
+  $('apply').addEventListener('click', () => changeEvolution('apply'));
+  $('rollback').addEventListener('click', () => changeEvolution('rollback'));
   $('retry-read').addEventListener('click', readChat);
   $('retry-send').addEventListener('click', () => sendMessage(true));
   $('discard').addEventListener('click', () => {

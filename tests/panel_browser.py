@@ -23,11 +23,17 @@ class PanelTest(unittest.TestCase):
         self.page = context.new_page()
         self.el = self.page.locator
         self.online = True
+        self.models = ["demo"]
         self.lose_ack = False
         self.native_available = False
         self.native_review = None
         self.calls = []
         self.storage = {}
+        self.management_version = 1
+        self.evolution = dict(revision=1, source="return original()", proposal=None, job=None,
+                              model="demo", canRollback=False)
+        self.evolution_reads = 0
+        self.reject_build = self.lose_proposal_ack = self.lose_delete_ack = False
         self.profiles = {
             "legacy": dict(id="legacy", name="Anterior", managed=True, model="legacy/model",
                            instructions="Instrucciones originales"),
@@ -59,7 +65,8 @@ class PanelTest(unittest.TestCase):
             ]
             if args.get("cursor") == "2":
                 return {"agents": summaries[1:]}
-            result = {"agents": summaries[:1], "models": ["demo"], "managedOnline": self.online}
+            result = {"agents": summaries[:1], "models": self.models, "managedOnline": self.online,
+                      "managementVersion": self.management_version}
             if len(summaries) > 1:
                 result["nextCursor"] = "2"
             return result
@@ -73,6 +80,39 @@ class PanelTest(unittest.TestCase):
             return profile
         if method == "agents.profile":
             return self.profiles[args["id"]]
+        if method == "agents.delete":
+            self.profiles.pop(args["id"], None)
+            if self.lose_delete_ack:
+                self.lose_delete_ack = False
+                raise RuntimeError("Connection lost")
+            return {"id": args["id"], "deleted": True}
+        if method == "evolution.get":
+            self.evolution_reads += 1
+            job = self.evolution["job"]
+            if job and job["status"] == "running" and self.evolution_reads >= 2:
+                if self.reject_build:
+                    job.update(status="failed", error="Could not meet the requirement.")
+                else:
+                    self.evolution.update(job=None, proposal=dict(requestId=job["requestId"],
+                        requirement=job["requirement"], baseRevision=self.evolution["revision"],
+                        source="return count(words)", builder=job["builder"],
+                        checks=[dict(input="/words one two", expected="2"), dict(input="Hello", expected=None)]))
+            return self.evolution
+        if method == "evolution.propose":
+            if self.lose_proposal_ack:
+                self.lose_proposal_ack = False
+                raise RuntimeError("Delivery unconfirmed")
+            self.evolution_reads = 0
+            self.evolution["job"] = dict(requestId=args["requestId"], requirement=args["requirement"],
+                                         builder=args["builderModel"], status="running")
+            return self.evolution
+        if method == "evolution.apply":
+            self.evolution.update(revision=2, source=self.evolution["proposal"]["source"],
+                                  proposal=None, job=None, canRollback=True)
+            return self.evolution
+        if method == "evolution.rollback":
+            self.evolution.update(revision=3, source="return original()", proposal=None, job=None, canRollback=False)
+            return self.evolution
         if method == "chat.openNative":
             if self.native_review and args.get("reviewId") != self.native_review:
                 return {"status": "needsReview", "reviewId": self.native_review, "message": "Check your open tabs."}
@@ -170,6 +210,98 @@ class PanelTest(unittest.TestCase):
         self.assertEqual([args for method, args in self.calls if method == "chat.openNative"], [
             {"id": "legacy"}, {"id": "legacy", "newChat": True, "reviewId": "receipt-1"},
         ])
+
+
+    def open_evolution(self):
+        self.open_panel()
+        self.page.get_by_role("button", name="Details for Anterior").click()
+        self.el("#evolve").click()
+        expect(self.el("#requirement")).to_be_visible()
+
+    def test_review_apply_and_restore_an_evolution(self):
+        self.models.append("openai/gpt-4.1-mini")
+        self.open_evolution()
+        expect(self.el("#evolution-target")).to_contain_text("legacy")
+        expect(self.el("#builder-model")).to_have_value("demo")
+        self.el("#builder-model").select_option("openai/gpt-4.1-mini")
+        expect(self.el("#demo-example")).to_be_hidden()
+        self.el("#requirement").fill("Add a /words command that counts words.")
+        self.el("#acceptance-example summary").click()
+        self.el("#example-input").fill("/words real check")
+        self.el("#propose").click()
+        expect(self.el("#evolution-error")).to_contain_text("Complete both fields")
+        self.el("#example-reply").fill("2")
+        self.el("#propose").click()
+        expect(self.el("#propose")).to_be_disabled()
+        self.open_evolution()
+        expect(self.el("#checks li")).to_have_text(["/words one two → 2", "Hello → Continue normal chat"])
+        expect(self.el("#active-label")).to_contain_text("revision 1")
+        self.el("#candidate-script summary").click()
+        expect(self.el("#candidate-source")).to_have_text("return count(words)")
+        self.el("#apply").click()
+        expect(self.el("#active-label")).to_contain_text("revision 2")
+        self.el("#active-label").click()
+        self.el("#rollback").click()
+        expect(self.el("#active-label")).to_contain_text("revision 3")
+        expect(self.el("#active-source")).to_have_text("return original()")
+        proposals = [data for name, data in self.calls if name == "evolution.propose"]
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["builderModel"], "openai/gpt-4.1-mini")
+        self.assertEqual(proposals[0]["acceptance"], [dict(input="/words real check", expected="2")])
+        self.assertIn(("evolution.apply", dict(id="legacy", requestId=proposals[0]["requestId"], baseRevision=1)), self.calls)
+        self.assertIn(("evolution.rollback", dict(id="legacy", revision=2)), self.calls)
+
+    def test_retry_evolution_after_unknown_delivery_and_known_failure(self):
+        self.open_evolution()
+        self.lose_proposal_ack = self.reject_build = True
+        self.el("#requirement").fill("Count words")
+        self.el("#propose").click()
+        expect(self.el("#evolution-error")).to_contain_text("Delivery unconfirmed")
+        self.open_evolution()
+        expect(self.el("#requirement")).to_have_value("Count words")
+        self.el("#propose").click()
+        expect(self.el("#evolution-error")).to_have_text("Could not meet the requirement.")
+        self.reject_build = False
+        self.el("#propose").click()
+        expect(self.el("#candidate")).to_be_visible()
+        ids = [data["requestId"] for name, data in self.calls if name == "evolution.propose"]
+        self.assertTrue(all("acceptance" not in data for name, data in self.calls if name == "evolution.propose"))
+        self.assertEqual(ids[0], ids[1])
+        self.assertNotEqual(ids[1], ids[2])
+
+    def test_delete_requires_confirmation_and_retries_the_same_agent(self):
+        self.open_panel()
+        self.page.get_by_role("button", name="Details for Anterior").click()
+        self.el("#edit").click()
+        self.el("#delete").click()
+        expect(self.el("#delete-target")).to_have_text("Anterior · legacy")
+        expect(self.el("#delete-cancel")).to_be_focused()
+        self.el("#delete-cancel").click()
+        self.assertFalse(any(name == "agents.delete" for name, _ in self.calls))
+        self.el("#delete").click()
+        self.lose_delete_ack = True
+        self.el("#delete-yes").click()
+        expect(self.el("#delete-error")).to_contain_text("Connection lost")
+        self.el("#delete-yes").click()
+        expect(self.el("#launch-status")).to_have_text("Deleted legacy.")
+        expect(self.el("#agents li")).to_have_count(1)
+        expect(self.el("#agents")).to_contain_text("Externo")
+        operations = [data for name, data in self.calls if name == "agents.delete"]
+        self.assertEqual(operations[0], operations[1])
+
+    def test_external_agents_and_older_services_preserve_existing_controls(self):
+        self.management_version = None
+        self.open_panel()
+        self.page.get_by_role("button", name="Details for Anterior").click()
+        expect(self.el("#evolve")).to_be_hidden()
+        self.el("#edit").click()
+        expect(self.el("#delete")).to_be_hidden()
+        self.management_version = 1
+        self.open_panel()
+        self.el("#agents .agent").filter(has_text="Externo").click()
+        expect(self.el("#evolve")).to_be_hidden()
+        self.el("#edit").click()
+        expect(self.el("#delete")).to_be_hidden()
 
 
 if __name__ == "__main__":

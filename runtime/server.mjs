@@ -15,10 +15,15 @@ const methods = new Map([
       agents: profiles.map(({ id, name, model, managed }) => ({ id, name, model, managed })),
       models: manager.availableModels(),
       nativeChatVersion: 1,
+      managementVersion: 1,
     };
   }],
   ['agents.profile', (manager, params) => manager.profile(params)],
   ['agents.create', (manager, params) => manager.create(params)],
+  ['agents.delete', (manager, params) => manager.delete(params)],
+  ...['get', 'propose', 'apply', 'rollback'].map(action => [
+    'evolution.' + action, (manager, params) => manager.evolution[action](params),
+  ]),
   ['agents.update', (manager, params) => manager.update(params)],
   ['chat.read', (manager, params) => manager.chat(params)],
   ['chat.turn', (manager, params) => manager.turn(params)],

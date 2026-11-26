@@ -92,7 +92,8 @@ export default function activate(orca) {
       }
     }
     const managedOnline = local.status === 'fulfilled';
-    return { agents, warnings, managedOnline, models: managedOnline ? (local.value.models ?? ['demo']) : [] };
+    return { agents, warnings, managedOnline, models: managedOnline ? (local.value.models ?? ['demo']) : [],
+      managementVersion: managedOnline && local.value.managementVersion === 1 ? 1 : 0 };
   }));
   async function profile({ id }, { signal }) {
     try {
@@ -113,7 +114,8 @@ export default function activate(orca) {
     const agent = await profile({ id }, context);
     return openNative(agent, { newChat: newChat === true, reviewId });
   });
-  for (const name of ['agents.create', 'agents.update', 'chat.read', 'chat.send']) {
+  for (const name of ['agents.create', 'agents.update', 'agents.delete', 'evolution.get',
+    'evolution.propose', 'evolution.apply', 'evolution.rollback', 'chat.read', 'chat.send']) {
     orca.panels.handle(name, async (params, { signal }) => {
       if (!params || typeof params !== 'object') throw new Error('Missing request parameters.');
       if (!String(params.id ?? '').startsWith('external:')) return callLocal(name, params, { signal });

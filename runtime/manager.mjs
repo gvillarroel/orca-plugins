@@ -9,6 +9,8 @@ import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 import { configure, createRegistry, defineDoc, Harness, InboxDoc, LiveDoc } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { acceptNativeResults, cancelNativeTurn, nativeContext, nativeExtension, pendingNativeRound, prepareNativeInput } from './native-tools.mjs';
+import { commitScriptReply, createEvolutionManager, evaluateForChat, evolutionIsRunning } from './evolution-state.mjs';
+import { demoEvolutionReply } from './evolution.mjs';
 
 const rosterDoc = defineDoc({
   kind: 'orca.agent-roster', version: 1, scope: 'conversation', history: 'latest', fork: 'initial',
@@ -154,11 +156,12 @@ async function chatSnapshot(tx, conversationId) {
 }
 
 function demoProvider() {
-  const demo = fauxProvider();
+  const demo = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-script-editor' }] });
   // Script each actual model invocation, including ones resumed after restarting the host.
-  function reply(transcript) {
+  function reply(transcript, _options, _state, model) {
     const lastUser = transcript.messages.findLast((message) => message.role === 'user');
     const text = textContent(lastUser?.content);
+    if (model.id === 'faux-script-editor') return fauxAssistantMessage(demoEvolutionReply(text));
     return fauxAssistantMessage('Demo echo: ' + text);
   }
   const provider = { ...demo.provider };
@@ -228,8 +231,17 @@ export async function openManager({ dataDir, env = process.env, now = Date.now }
     return message;
   }
 
+  const evolution = createEvolutionManager({
+    root, harness, now, find: async (tx, id) => findProfile(await tx.doc(rosterDoc, root.id), id),
+    list: async () => (await profiles()).agents, availableModels, redact: redactError,
+    modelRef: model => model === 'demo' ? { provider: 'faux', modelId: 'faux-script-editor' } : modelRef(model, models),
+  });
+  try { await evolution.recover(); }
+  catch (error) { await evolution.close(); await harness.close(context); throw error; }
+
   return {
     availableModels,
+    evolution,
 
     async list() {
       return (await profiles()).agents.map(publicProfile);
@@ -254,6 +266,9 @@ export async function openManager({ dataDir, env = process.env, now = Date.now }
       return root.commit(async (tx) => {
         const roster = await tx.doc(rosterDoc, root.id);
         if (requestId !== undefined) {
+          if (roster.retired?.some((item) => item.recruitRequestId === requestId)) {
+            throw invalid('The agent created by this request has been deleted.', 409);
+          }
           const existing = roster.agents.find((item) => item.recruitment?.requestId === requestId);
           if (existing) {
             if (existing.recruitment.fingerprint !== fingerprint) throw invalid('This request ID was used for a different agent.', 409);
@@ -261,6 +276,9 @@ export async function openManager({ dataDir, env = process.env, now = Date.now }
           }
         }
         const stableId = requestedId ?? randomUUID();
+        if (roster.retired?.some((item) => item.id === stableId)) {
+          throw invalid('This agent ID was retired. Choose a new ID.', 409);
+        }
         if (roster.agents.some((p) => p.id === stableId)) throw invalid('This agent ID is already in use.', 409);
         const ref = newModel(model);
         const conversation = await tx.createConversation({ ownership: { kind: 'ownerless' } });
@@ -269,6 +287,33 @@ export async function openManager({ dataDir, env = process.env, now = Date.now }
         if (requestId !== undefined) item.recruitment = { requestId, fingerprint };
         roster.agents.push(item);
         return publicProfile(item);
+      }, context);
+    },
+
+    async delete({ id, requestId }) {
+      agentId(id);
+      string(requestId, 'Request ID', 160);
+      return root.commit(async (tx) => {
+        const roster = await tx.doc(rosterDoc, root.id);
+        const previous = roster.retired?.find((item) => item.deleteRequestId === requestId);
+        if (previous && previous.id !== id) throw invalid('This request ID was used to delete a different agent.', 409);
+        if (roster.retired?.some((item) => item.id === id)) return { id, deleted: true };
+        const profile = findProfile(roster, id);
+        const live = await tx.doc(LiveDoc, profile.conversationId);
+        const inbox = await tx.doc(InboxDoc, profile.conversationId);
+        if (live.run || inbox.items.length) throw invalid('Wait for the current turn to finish before deleting this agent.', 409);
+        if (await evolutionIsRunning(tx, profile.conversationId)) {
+          throw invalid('Wait for the current evolution to finish before deleting this agent.', 409);
+        }
+
+        // IDs are also model IDs in saved Orca sessions. Never give a deleted model's ID
+        // to a new conversation, including when a client replays an unconfirmed recruitment.
+        const retired = { id, deleteRequestId: requestId };
+        if (profile.recruitment) retired.recruitRequestId = profile.recruitment.requestId;
+        roster.retired ??= [];
+        roster.retired.push(retired);
+        roster.agents.splice(roster.agents.findIndex((item) => item.id === id), 1);
+        return { id, deleted: true };
       }, context);
     },
 
@@ -349,7 +394,9 @@ export async function openManager({ dataDir, env = process.env, now = Date.now }
       const grant = nativeContext(nativeTools, nativeSystem);
       string(requestId, 'Request ID', 160);
       const conv = await conversationFor(id);
+      const evaluated = await evaluateForChat(harness, conv.id, input);
       await conv.commit(async (tx) => {
+        const profile = findProfile(await tx.doc(rosterDoc, root.id), id);
         const existing = await tx.submissionByRequest(conv.id, requestId);
         await prepareNativeInput(tx, conv.id, grant, requestId, existing);
         if (existing) {
@@ -361,7 +408,7 @@ export async function openManager({ dataDir, env = process.env, now = Date.now }
           }
           return;
         }
-        const profile = findProfile(await tx.doc(rosterDoc, root.id), id);
+        if (await commitScriptReply(tx, conv.id, input, requestId, evaluated, now)) return;
         const { provider, modelId } = modelRef(profile.model, models);
         if (Array.isArray(input) && (profile.model === 'demo' || !models.getModel(provider, modelId)?.input.includes('image'))) {
           throw invalid('This agent’s model accepts text only.', 422);
@@ -373,6 +420,6 @@ export async function openManager({ dataDir, env = process.env, now = Date.now }
       return { accepted: true };
     },
 
-    close: () => harness.close(context),
+    async close() { await evolution.close(); await harness.close(context); },
   };
 }
