@@ -1,0 +1,6 @@
+{
+  "name": "orca-pi-durable-provider",
+  "private": true,
+  "type": "module",
+  "pi": { "extensions": ["./index.js"] }
+}

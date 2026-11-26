@@ -24,6 +24,8 @@ class PanelTest(unittest.TestCase):
         self.el = self.page.locator
         self.online = True
         self.lose_ack = False
+        self.native_available = False
+        self.native_review = None
         self.calls = []
         self.storage = {}
         self.profiles = {
@@ -44,7 +46,9 @@ class PanelTest(unittest.TestCase):
           storage: { keys: storeKeys, get: storeGet, set: storeSet, delete: storeDelete }
         }""")
         self.page.set_content(PANEL.read_text(encoding="utf-8"))
-        expect(self.el("#count")).to_contain_text("agente")
+        expect(self.el("html")).to_have_attribute("lang", "en")
+        expect(self.page.get_by_role("heading", name="Agents", exact=True)).to_be_visible()
+        expect(self.el("#count")).to_contain_text("agent")
 
     def request(self, method, args, _options):
         self.calls.append((method, args))
@@ -69,6 +73,12 @@ class PanelTest(unittest.TestCase):
             return profile
         if method == "agents.profile":
             return self.profiles[args["id"]]
+        if method == "chat.openNative":
+            if self.native_review and args.get("reviewId") != self.native_review:
+                return {"status": "needsReview", "reviewId": self.native_review, "message": "Check your open tabs."}
+            if self.native_available:
+                return {"status": "opened", "message": "Opened in Orca Chat.", "sessionId": "test-session"}
+            raise RuntimeError("Install the Pi Durable provider to use Orca Chat.")
         if method == "chat.read":
             return {"messages": [], "busy": False}
         raise AssertionError(method)
@@ -114,8 +124,8 @@ class PanelTest(unittest.TestCase):
 
     def test_pagination_old_profiles_and_offline_service(self):
         self.open_panel()
-        expect(self.el("#agents button")).to_have_count(2)
-        self.el("#agents button").filter(has_text="Anterior").click()
+        expect(self.el("#agents li")).to_have_count(2)
+        self.page.get_by_role("button", name="Details for Anterior").click()
         self.assertNotIn("agents.profile", [method for method, _ in self.calls])
         self.el("#edit").click()
         expect(self.el("#agent-instructions")).to_have_value("Instrucciones originales")
@@ -124,12 +134,42 @@ class PanelTest(unittest.TestCase):
         self.el("#profile-back").click()
         self.el("#chat-back").click()
         expect(self.el("#new")).to_be_disabled()
-        expect(self.el("#list-warning")).to_contain_text("inicia el servicio local")
+        expect(self.el("#list-warning")).to_contain_text("start the local service")
         self.el("#agents button").filter(has_text="Externo").click()
         self.el("#edit").click()
         expect(self.el("#agent-model")).to_be_disabled()
         expect(self.el("#save")).to_be_hidden()
         self.assertEqual([args for method, args in self.calls if method == "agents.profile"], [{"id": "legacy"}])
+
+    def test_managed_agent_selection_prefers_native_chat_and_details_reopens_durable_history(self):
+        self.native_available = True
+        self.open_panel()
+        self.el("#agents .agent").filter(has_text="Anterior").click()
+        expect(self.el("#launch-status")).to_have_text("Opened in Orca Chat.")
+        expect(self.el("#conversation")).to_be_hidden()
+        self.assertEqual([args for method, args in self.calls if method == "chat.openNative"], [{"id": "legacy"}])
+        self.page.get_by_role("button", name="Details for Anterior").click()
+        expect(self.el("#chat-title")).to_have_text("Anterior")
+        expect(self.el("#launch-error")).to_be_hidden()
+        self.el("#chat-back").click()
+        self.native_available = False
+        self.el("#agents .agent").filter(has_text="Anterior").click()
+        expect(self.el("#launch-error")).to_contain_text("Install the Pi Durable provider")
+        expect(self.el("#messages")).to_be_attached()
+
+    def test_uncertain_launch_requires_an_explicit_new_tab_request(self):
+        self.native_available = True
+        self.native_review = "receipt-1"
+        self.open_panel()
+        self.el("#agents .agent").filter(has_text="Anterior").click()
+        expect(self.el("#launch-status")).to_have_text("Check your open tabs.")
+        expect(self.el("#new-native")).to_be_visible()
+        self.el("#new-native").click()
+        expect(self.el("#new-native")).to_be_hidden()
+        expect(self.el("#launch-status")).to_have_text("Opened in Orca Chat.")
+        self.assertEqual([args for method, args in self.calls if method == "chat.openNative"], [
+            {"id": "legacy"}, {"id": "legacy", "newChat": True, "reviewId": "receipt-1"},
+        ])
 
 
 if __name__ == "__main__":

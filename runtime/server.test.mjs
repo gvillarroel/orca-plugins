@@ -76,7 +76,11 @@ test('serves authenticated profiles and chats, unlinks its descriptor and rotate
   assert.equal(list.status, 200);
   assert.deepEqual(list.body.agents, [{ id: profile.id, name: profile.name, model: 'demo', managed: true }]);
   assert.ok(list.body.models.includes('demo'));
+  assert.equal(list.body.nativeChatVersion, 1);
   assert.deepEqual(await post(connection, 'agents.profile', { id: profile.id }), created);
+  assert.deepEqual(await post(connection, 'unknown.method', {}), {
+    status: 404, body: { code: 'unknown_operation', error: 'Unknown operation.' },
+  });
   assert.equal((await post(connection, 'agents.profile', { id: 'missing' })).status, 404);
   const input = { id: profile.id, text: 'hello over HTTP', requestId: 'first' };
   assert.deepEqual(await post(connection, 'chat.send', input), { status: 200, body: { accepted: true } });
@@ -97,6 +101,21 @@ test('serves authenticated profiles and chats, unlinks its descriptor and rotate
   await assert.rejects(readFile(f.descriptor), { code: 'ENOENT' });
 
   const restarted = await f.start();
+  const turn = await post(restarted, 'chat.turn', { id: profile.id, requestId: 'first' });
+  assert.equal(turn.status, 200);
+  assert.equal(turn.body.status, 'done');
+  assert.equal(turn.body.text, 'Demo echo: ' + input.text);
+  assert.deepEqual(await post(restarted, 'chat.cancel', { id: profile.id, requestId: 'first' }),
+    { status: 200, body: { status: 'settled' } });
+  // The native tool channel admits multi-megabyte results through HTTP; a call from
+  // a different turn is refused by the manager after the body passes transport framing.
+  const id = 'orca_00000000-0000-4000-8000-000000000000';
+  const nativeResult = { id, isError: false, content: [{ type: 'text', text: 'x'.repeat(1000 * 1024) }] };
+  const large = await post(restarted, 'chat.toolResults', {
+    id: profile.id, requestId: 'first', results: [nativeResult, nativeResult, nativeResult],
+  });
+  assert.equal(large.status, 409);
+  assert.match(large.body.error, /does not own/);
   assert.notEqual(restarted.token, connection.token);
   assert.equal((await post({ ...restarted, token: connection.token }, 'agents.list', {})).status, 403);
   assert.deepEqual((await post(restarted, 'chat.read', { id: profile.id })).body, chat);

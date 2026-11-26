@@ -14,12 +14,16 @@ const methods = new Map([
     return {
       agents: profiles.map(({ id, name, model, managed }) => ({ id, name, model, managed })),
       models: manager.availableModels(),
+      nativeChatVersion: 1,
     };
   }],
   ['agents.profile', (manager, params) => manager.profile(params)],
   ['agents.create', (manager, params) => manager.create(params)],
   ['agents.update', (manager, params) => manager.update(params)],
   ['chat.read', (manager, params) => manager.chat(params)],
+  ['chat.turn', (manager, params) => manager.turn(params)],
+  ['chat.toolResults', (manager, params) => manager.toolResults(params)],
+  ['chat.cancel', (manager, params) => manager.cancel(params)],
   ['chat.send', (manager, params) => manager.send(params)],
 ]);
 
@@ -32,22 +36,22 @@ function reply(response, status, result) {
   response.end(JSON.stringify(result));
 }
 
-async function readParams(request) {
+async function readParams(request, maxBytes) {
   let size = 0;
   const chunks = [];
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 512 * 1024) throw new Error('La solicitud supera el tamaño permitido.');
+    if (size > maxBytes) throw new Error('The request exceeds the size limit.');
     chunks.push(chunk);
   }
   let params;
   try {
     params = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
-    throw new Error('La solicitud debe contener JSON válido.');
+    throw new Error('The request must contain valid JSON.');
   }
   if (!params || typeof params !== 'object' || Array.isArray(params)) {
-    throw new Error('Se esperaba un objeto con los parámetros.');
+    throw new Error('Expected a JSON object containing the request parameters.');
   }
   return params;
 }
@@ -63,24 +67,26 @@ export async function startService({ dataDir = join(homedir(), '.pi-durable-orca
 
   async function handle(request, response) {
     const address = server.address();
-    if (!ready || !address) return reply(response, 503, { error: 'Servicio en transición.' });
+    if (!ready || !address) return reply(response, 503, { error: 'The service is starting or shutting down.' });
     const supplied = Buffer.from(request.headers.authorization ?? '');
     if (request.headers.host !== host + ':' + address.port || request.headers.origin ||
         supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-      return reply(response, 403, { error: 'Acceso denegado.' });
+      return reply(response, 403, { error: 'Access denied.' });
     }
     const operation = methods.get(request.url?.slice(1));
-    if (!operation) return reply(response, 404, { error: 'Operación desconocida.' });
+    if (!operation) return reply(response, 404, { code: 'unknown_operation', error: 'Unknown operation.' });
     if (request.method !== 'POST' || request.headers['content-type'] !== 'application/json') {
-      return reply(response, 400, { error: 'Se requiere una solicitud POST con JSON.' });
+      return reply(response, 400, { error: 'Use a POST request with a JSON body.' });
     }
     try {
-      const params = await readParams(request);
+      const maxBytes = request.url === '/chat.send' ? 12 * 1024 * 1024 :
+        request.url === '/chat.toolResults' ? 3 * 1024 * 1024 + 4096 : 512 * 1024;
+      const params = await readParams(request, maxBytes);
       const result = await operation(manager, params);
       reply(response, 200, result);
     } catch (error) {
       const status = [400, 404, 409, 422].includes(error.statusCode) ? error.statusCode : 400;
-      reply(response, status, { error: error.message || 'Falló la operación local.' });
+      reply(response, status, { error: error.message || 'The local operation failed.' });
     }
   }
 
@@ -123,7 +129,7 @@ export async function startService({ dataDir = join(homedir(), '.pi-durable-orca
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   try {
     const service = await startService();
-    console.log('Pi Durable está listo en este equipo. Abre el panel Pi Durable en Orca. Ctrl+C para detener.');
+    console.log('Pi Durable is ready on this computer. Open the Pi Durable panel in Orca. Press Ctrl+C to stop.');
     for (const signal of ['SIGINT', 'SIGTERM']) {
       process.once(signal, () => service.close().catch(error => {
         console.error(error.message);
@@ -132,7 +138,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     }
   } catch (error) {
     console.error(error.code === 'EADDRINUSE'
-      ? 'El puerto local 47896 ya está en uso. Comprueba si Pi Durable ya está en ejecución.'
+      ? 'Local port 47896 is already in use. Check whether the Pi Durable service is running.'
       : error.message);
     process.exitCode = 1;
   }

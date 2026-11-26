@@ -17,7 +17,7 @@ function requireValue(condition, message) {
 
 function localPath(base, value) {
   requireValue(typeof value === 'string' && value.trim() && value.length <= 4096 &&
-    !/^[\\/]{2}/.test(value) && !value.includes('\0'), 'La ruta del registro debe ser local.');
+    !/^[\\/]{2}/.test(value) && !value.includes('\0'), 'The registry path must be local.');
   return resolve(base, value);
 }
 
@@ -25,7 +25,7 @@ async function readSmallFile(path, limit) {
   const file = await open(path, 'r');
   try {
     const stat = await file.stat();
-    requireValue(stat.isFile() && stat.size <= limit, 'Archivo no válido.');
+    requireValue(stat.isFile() && stat.size <= limit, 'Expected a regular file within the size limit.');
     const bytes = Buffer.alloc(limit + 1);
     let length = 0;
     while (length < bytes.length) {
@@ -33,7 +33,7 @@ async function readSmallFile(path, limit) {
       if (!bytesRead) break;
       length += bytesRead;
     }
-    requireValue(length <= limit, 'Archivo demasiado grande.');
+    requireValue(length <= limit, 'File exceeds the size limit.');
     return bytes.toString('utf8', 0, length);
   } finally {
     await file.close();
@@ -44,7 +44,7 @@ async function readConfig(path) {
   try {
     return JSON.parse(await readSmallFile(path, maxConfig));
   } catch {
-    throw new Error('No se pudo leer la configuración JSON del registro externo.');
+    throw new Error('Could not read the external registry’s JSON configuration.');
   }
 }
 
@@ -54,13 +54,13 @@ async function exists(path) {
     return true;
   } catch (error) {
     if (error.code === 'ENOENT') return false;
-    throw new Error('No se pudo acceder al registro externo.');
+    throw new Error('Could not access the external registry.');
   }
 }
 
 async function registryFile(root, options) {
   if (options.connectionsFile) {
-    requireValue(isAbsolute(options.connectionsFile), 'El registro configurado en Orca requiere una ruta absoluta.');
+    requireValue(isAbsolute(options.connectionsFile), 'Enter an absolute path for the external registry in Orca.');
     return localPath(root, options.connectionsFile);
   }
   if (options.env.PI_DURABLE_CONNECTIONS !== undefined) {
@@ -94,10 +94,10 @@ async function registrations(options) {
   const registry = await readConfig(path);
   requireValue(record(registry) && registry.version === 1 && Array.isArray(registry.services) &&
     registry.services.length <= 32 && Object.keys(registry).every(k => ['version', 'services'].includes(k)),
-    'El registro externo debe usar el formato de conexiones versión 1.');
+    'The external registry must use version 1 of the connections format.');
   const seen = new Set();
   return registry.services.map(item => {
-    requireValue(validRegistration(item) && !seen.has(item.id), 'El registro contiene un servicio inválido o repetido.');
+    requireValue(validRegistration(item) && !seen.has(item.id), 'The registry contains an invalid or duplicate service.');
     seen.add(item.id);
     return { id: item.id, configPath: localPath(dirname(path), item.configPath) };
   });
@@ -108,7 +108,7 @@ async function readService(registration) {
   requireValue(record(config) && config.version === 1 && config.host === '127.0.0.1' &&
     validNumber(config.port) && config.port <= 65535 &&
     !['url', 'baseUrl', 'token', 'authorization', 'username', 'password'].some(key => key in config),
-    'El servicio requiere una configuración local en 127.0.0.1 sin credenciales incrustadas.');
+    'Set the service host to 127.0.0.1 and remove any credentials from its configuration.');
   return {
     id: registration.id,
     url: 'http://127.0.0.1:' + config.port,
@@ -122,7 +122,7 @@ async function readToken(service) {
     const token = (await readSmallFile(service.tokenPath, 256)).trim();
     if (/^[a-f0-9]{64}$/.test(token)) return token;
   } catch { /* Hide filesystem errors and contents from the panel. */ }
-  throw new Error('El token local del servicio no está disponible o no es válido.');
+  throw new Error('The local service token is missing or invalid.');
 }
 
 async function request(service, route, body, signal) {
@@ -141,13 +141,13 @@ async function request(service, route, body, signal) {
       req.end(body === undefined ? undefined : JSON.stringify(body));
     });
   } catch {
-    throw new Error('No se recibió respuesta del servicio local.');
+    throw new Error('The local service did not respond.');
   }
   if (response.statusCode < 200 || response.statusCode >= 300) {
     response.destroy();
-    throw new Error('El servicio local respondió con HTTP ' + response.statusCode + '.');
+    throw new Error('The local service returned HTTP ' + response.statusCode + '.');
   }
-  const oversized = 'La respuesta del servicio externo supera el límite de transferencia de 2 MiB.';
+  const oversized = 'The external service response exceeds the 2 MiB transfer limit.';
   if (Number(response.headers['content-length']) > maxResponse) {
     response.destroy();
     throw new Error(oversized);
@@ -161,19 +161,19 @@ async function request(service, route, body, signal) {
       chunks.push(part);
     }
   } catch {
-    throw new Error('La transferencia desde el servicio externo quedó incompleta.');
+    throw new Error('The connection closed before the external service finished sending its response.');
   }
   requireValue(length <= maxResponse, oversized);
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-  catch { throw new Error('El servicio externo devolvió JSON inválido.'); }
+  catch { throw new Error('The external service returned invalid JSON.'); }
 }
 
 function profiles(service, rows, online) {
-  requireValue(Array.isArray(rows), 'El servicio no devolvió una lista de agentes.');
+  requireValue(Array.isArray(rows), 'The service did not return an agent list.');
   const seen = new Set();
   return rows.map(agent => {
     requireValue(record(agent) && typeof agent.id === 'string' && serviceId.test(agent.id) &&
-      !seen.has(agent.id) && typeof agent.name === 'string', 'La lista de agentes del servicio es inválida.');
+      !seen.has(agent.id) && typeof agent.name === 'string', 'The service returned an invalid agent list.');
     seen.add(agent.id);
     const profile = { id: 'external:' + service.id + '/' + agent.id, name: agent.name,
       managed: false, online: online && agent.active !== 0 && agent.active !== false };
@@ -204,12 +204,12 @@ function publicText(content) {
 function failureMessage(reason) {
   const known = ['model_error', 'no_model', 'aborted', 'reset', 'faulted', 'orphaned', 'interrupted',
     'restart_limit', 'nothing_to_answer', 'turn_limit'];
-  return 'El envío quedó sin respuesta (' + (known.includes(reason) ? reason : 'falló el turno') + ').';
+  return 'The message received no reply (' + (known.includes(reason) ? reason : 'turn failed') + ').';
 }
 
 function chatView(snapshot) {
   requireValue(validNumber(snapshot?.conversation?.id) && Array.isArray(snapshot.entries),
-    'El servicio devolvió una conversación inválida.');
+    'The service returned an invalid conversation.');
   const live = snapshot.docs?.['pi.live'];
   const result = { conversationId: snapshot.conversation.id, messages: [], busy: !!live?.run };
   function clip(text, limit) {
@@ -246,7 +246,7 @@ function chatView(snapshot) {
     if (text.trim()) result.liveText = clip(text, 8000);
   }
   if (!result.busy && last?.role === 'assistant' && ['error', 'aborted'].includes(last.stopReason)) {
-    result.error = last.stopReason === 'aborted' ? 'El turno fue cancelado.' : 'Falló la generación de la respuesta.';
+    result.error = last.stopReason === 'aborted' ? 'The turn was canceled.' : 'The agent could not generate a reply.';
   }
   if (!result.busy && live?.runFailure) result.error = failureMessage(live.runFailure.reason);
   return result;
@@ -259,10 +259,10 @@ export function createExternalRegistry({ env = process.env, ...defaults } = {}) 
   }
   async function target(input) {
     const match = typeof input.id === 'string' && /^external:([a-z][a-z0-9-]{0,63})\/([a-z][a-z0-9-]{0,63})$/.exec(input.id);
-    requireValue(match, 'Identificador de agente externo inválido.');
+    requireValue(match, 'Invalid external agent ID.');
     const rows = await registrations(options(input));
     const registration = rows.find(row => row.id === match[1]);
-    requireValue(registration, 'El servicio ya no está registrado.');
+    requireValue(registration, 'The service is no longer registered.');
     return { service: await readService(registration), route: '/v1/agents/' + match[2] };
   }
   return {
@@ -281,7 +281,7 @@ export function createExternalRegistry({ env = process.env, ...defaults } = {}) 
       if (validNumber(input.submissionId) && input.conversationId === view.conversationId) {
         const status = await request(service, route + '/submissions/' + input.submissionId, undefined, input.signal);
         requireValue(status?.conversationId === view.conversationId && status.id === input.submissionId,
-          'El recibo no pertenece a esta conversación.');
+          'This receipt belongs to a different conversation.');
         if (['queued', 'placed'].includes(status.status)) view.busy = true;
         if (status.status === 'unanswered') view.error = failureMessage(status.reason);
       }
@@ -290,18 +290,18 @@ export function createExternalRegistry({ env = process.env, ...defaults } = {}) 
     async send(input) {
       requireValue(typeof input.text === 'string' && input.text.trim() && input.text.length <= 100000 &&
         typeof input.requestId === 'string' && input.requestId.trim() && input.requestId.length <= 512,
-        'El envío requiere texto y un identificador de solicitud estable.');
+        'A message requires text and a stable request ID.');
       const { service, route } = await target(input);
       try {
         const receipt = await request(service, route + '/messages', {
           content: input.text, requestId: input.requestId, whenBusy: 'followUp'
         }, input.signal);
         requireValue(validNumber(receipt?.conversationId) && validNumber(receipt.submissionId),
-          'El servicio devolvió un recibo de admisión inválido.');
+          'The service returned an invalid delivery receipt.');
         return { accepted: true, requestId: input.requestId,
           conversationId: receipt.conversationId, submissionId: receipt.submissionId };
       } catch (error) {
-        const retry = new Error(error.message + ' Para reintentar este envío, conserva el mismo identificador.');
+        const retry = new Error(error.message + ' Retry this message with the same request ID.');
         retry.requestId = input.requestId;
         throw retry;
       }

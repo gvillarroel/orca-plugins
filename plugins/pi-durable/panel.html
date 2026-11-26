@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -62,6 +62,8 @@
     }
     .tools { margin-top: 14px; }
     #agents { list-style: none; margin: 12px 0 0; padding: 0; }
+    #agents li { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--edge); }
+    #agents li .agent { flex: 1; min-width: 0; border-bottom: 0; }
     .agent {
       display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 1px 8px;
       width: 100%; border: 0; border-bottom: 1px solid var(--edge); border-radius: 0;
@@ -101,57 +103,60 @@
 <main>
   <section id="roster" aria-labelledby="roster-title">
     <header class="row">
-      <h1 id="roster-title" tabindex="-1">Agentes</h1>
-      <button class="button primary" id="new" type="button" disabled>+ Reclutar</button>
+      <h1 id="roster-title" tabindex="-1">Agents</h1>
+      <button class="button primary" id="new" type="button" disabled>+ Recruit</button>
     </header>
-    <label class="sr" for="filter">Buscar por nombre o ID</label>
-    <input id="filter" type="search" placeholder="Buscar por nombre o ID" autocomplete="off">
-    <div class="row tools"><small id="count" role="status">Cargando agentes…</small><button class="link" id="refresh" type="button">Actualizar</button></div>
+    <label class="sr" for="filter">Search by name or ID</label>
+    <input id="filter" type="search" placeholder="Search by name or ID" autocomplete="off">
+    <div class="row tools"><small id="count" role="status">Loading agents…</small><button class="link" id="refresh" type="button">Refresh</button></div>
     <p class="notice" id="list-warning" role="status" hidden></p>
-    <ul id="agents" aria-label="Agentes disponibles"></ul>
+    <p id="launch-status" role="status" hidden></p>
+    <button class="link" id="new-native" type="button" hidden>Start a new Orca chat</button>
+    <ul id="agents" aria-label="Available agents"></ul>
     <p class="empty" id="list-empty" hidden></p>
   </section>
 
   <section id="profile" aria-labelledby="profile-title" hidden>
-    <button class="link back" id="profile-back" type="button">← Volver</button>
-    <h1 id="profile-title" tabindex="-1">Reclutar agente</h1>
-    <p class="notice" id="external-note" hidden>La configuración de este agente se administra en su servicio de origen.</p>
+    <button class="link back" id="profile-back" type="button">← Back</button>
+    <h1 id="profile-title" tabindex="-1">Recruit agent</h1>
+    <p class="notice" id="external-note" hidden>Edit this agent in the service that manages it.</p>
     <p id="profile-loading" role="status" hidden></p>
     <p class="notice" id="profile-error" role="alert" hidden></p>
-    <button class="link" id="retry-profile" type="button" hidden>Volver a cargar el perfil</button>
+    <button class="link" id="retry-profile" type="button" hidden>Reload profile</button>
     <div id="pending-create" hidden>
-      <p class="notice">Hay un alta pendiente de confirmación. Puedes reintentarlo con los mismos datos o preparar otro agente.</p>
-      <button class="link" id="discard-create" type="button">Preparar otro agente</button>
+      <p class="notice">The service has not confirmed this agent yet. Retry with the same details or start a new agent.</p>
+      <button class="link" id="discard-create" type="button">Start a new agent</button>
     </div>
     <form id="profile-form">
-      <div><label for="agent-name">Nombre</label><input id="agent-name" required maxlength="96" autocomplete="off"></div>
+      <div><label for="agent-name">Name</label><input id="agent-name" required maxlength="96" autocomplete="off"></div>
       <div><label for="agent-id">ID</label><input class="mono" id="agent-id" maxlength="64" pattern="[a-z0-9][a-z0-9\-]{0,63}" autocomplete="off" spellcheck="false" aria-describedby="id-hint">
-        <small id="id-hint">Opcional. Usa minúsculas, números o guiones. Si lo dejas vacío, se genera al guardar.</small></div>
-      <div><label for="agent-model">Modelo</label><select class="mono" id="agent-model" required aria-describedby="model-hint"></select>
-        <small id="model-hint"><code>demo</code> devuelve un eco local.</small></div>
-      <div><label for="agent-instructions">Instrucciones</label><textarea id="agent-instructions" rows="5" maxlength="16000" placeholder="Define su tarea y cómo debe responder."></textarea></div>
-      <div><button class="button primary" id="save" type="submit">Reclutar agente</button></div>
+        <small id="id-hint">Optional. Use lowercase letters, numbers, or hyphens. Leave blank to generate an ID when you save.</small></div>
+      <div><label for="agent-model">Model</label><select class="mono" id="agent-model" required aria-describedby="model-hint"></select>
+        <small id="model-hint"><code>demo</code> echoes your message locally.</small></div>
+      <div><label for="agent-instructions">Instructions</label><textarea id="agent-instructions" rows="5" maxlength="16000" placeholder="Describe the task and how the agent should respond."></textarea></div>
+      <div><button class="button primary" id="save" type="submit">Recruit agent</button></div>
     </form>
   </section>
 
   <section id="conversation" aria-labelledby="chat-title" hidden>
     <header class="chat-head">
-      <button class="link back" id="chat-back" type="button">← Agentes</button>
-      <div class="row"><h1 id="chat-title" tabindex="-1"></h1><button class="button" id="edit" type="button">Editar</button></div>
+      <button class="link back" id="chat-back" type="button">← Agents</button>
+      <div class="row"><h1 id="chat-title" tabindex="-1"></h1><button class="button" id="edit" type="button">Edit</button></div>
       <small id="chat-id" class="mono"></small>
     </header>
-    <div id="timeline" tabindex="0" aria-label="Historial de la conversación">
-      <p class="notice" id="history-limit" hidden>Se muestra una parte del historial. La conversación completa se conserva en el servicio.</p>
-      <ol id="messages" aria-label="Mensajes"></ol>
+    <p class="notice" id="launch-error" role="status" hidden></p>
+    <div id="timeline" tabindex="0" aria-label="Conversation history">
+      <p class="notice" id="history-limit" hidden>Showing recent messages. The service keeps the full conversation.</p>
+      <ol id="messages" aria-label="Messages"></ol>
       <p class="empty" id="chat-empty"></p>
       <p class="notice" id="chat-error" role="status" hidden></p>
-      <button class="link" id="retry-read" type="button" hidden>Volver a cargar</button>
+      <button class="link" id="retry-read" type="button" hidden>Reload</button>
     </div>
     <form class="composer" id="compose">
-      <label for="prompt">Mensaje</label>
-      <textarea id="prompt" rows="2" maxlength="32000" placeholder="Escribe un mensaje…" required></textarea>
-      <div class="row"><small id="send-state" role="status"></small><button class="button primary" id="send" type="submit">Enviar</button></div>
-      <div id="pending-actions" hidden><button class="link" id="retry-send" type="button">Reintentar envío</button><button class="link" id="discard" type="button">Descartar reintento</button></div>
+      <label for="prompt">Message</label>
+      <textarea id="prompt" rows="2" maxlength="32000" placeholder="Write a message…" required></textarea>
+      <div class="row"><small id="send-state" role="status"></small><button class="button primary" id="send" type="submit">Send</button></div>
+      <div id="pending-actions" hidden><button class="link" id="retry-send" type="button">Retry send</button><button class="link" id="discard" type="button">Discard retry</button></div>
     </form>
   </section>
 </main>
@@ -174,6 +179,8 @@
   let createAttempt = null;
   const createKeyPrefix = 'recruit-';
   let chatVersion = 0;
+  let selectionVersion = 0;
+  let launchReview;
   let pollTimer;
   let history = null;
   let historyError = '';
@@ -186,7 +193,7 @@
 
   function request(name, data) {
     if (!window.orca?.plugin?.request) {
-      throw new Error('Abre este panel en Orca y comprueba que el plugin tenga permiso para ejecutar su worker.');
+      throw new Error('Open this panel in Orca and allow the plugin to run its worker.');
     }
     return window.orca.plugin.request(name, data, { timeoutMs: 30000 });
   }
@@ -200,6 +207,9 @@
 
   function show(next) {
     clearTimeout(pollTimer);
+    selectionVersion++;
+    launchReview = null;
+    $('new-native').hidden = true;
     chatVersion++;
     profileVersion++;
     view = next;
@@ -215,9 +225,9 @@
   }
 
   function stateLabel(agent) {
-    if (agent.online === false) return 'Sin conexión';
-    if (agent.online === true) return 'En línea';
-    return agent.managed ? 'Local' : 'Externo';
+    if (agent.online === false) return 'Offline';
+    if (agent.online === true) return 'Online';
+    return agent.managed ? 'Local' : 'External';
   }
 
   function drawList() {
@@ -230,19 +240,25 @@
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'agent';
-      button.addEventListener('click', () => openChat(agent));
+      button.addEventListener('click', () => selectAgent(agent));
       addText(button, 'strong', agent.name || agent.id);
       addText(button, 'small', agent.id, 'mono');
       addText(button, 'span', stateLabel(agent), 'state');
       row.append(button);
+      if (agent.managed) {
+        const details = addText(row, 'button', 'Details', 'link');
+        details.type = 'button';
+        details.setAttribute('aria-label', 'Details for ' + (agent.name || agent.id));
+        details.addEventListener('click', () => openChat(agent));
+      }
       rows.append(row);
     }
     $('agents').replaceChildren(rows);
-    $('count').textContent = term ? matches.length + ' de ' + agents.length :
-      agents.length + (agents.length === 1 ? ' agente' : ' agentes');
+    $('count').textContent = term ? matches.length + ' of ' + agents.length :
+      agents.length + (agents.length === 1 ? ' agent' : ' agents');
     note('list-empty', !matches.length && hasList ?
-      (term ? 'No hay agentes que coincidan con la búsqueda.' : managedOnline ?
-        'Todavía no hay agentes. Recluta el primero para empezar.' : 'No hay agentes disponibles.') : '');
+      (term ? 'No agents match your search.' : managedOnline ?
+        'Recruit your first agent to get started.' : 'No agents available.') : '');
   }
 
   async function loadList() {
@@ -254,7 +270,7 @@
       const cursors = new Set();
       let cursor = result.nextCursor;
       while (cursor && version === listVersion) {
-        if (cursors.has(cursor)) throw new Error('El servicio devolvió una página repetida.');
+        if (cursors.has(cursor)) throw new Error('The service returned the same page twice.');
         cursors.add(cursor);
         const page = await request('agents.list', { cursor });
         collected.push(...page.agents);
@@ -268,13 +284,13 @@
       hasList = true;
       drawList();
       const notices = [...(result.warnings || [])];
-      if (!managedOnline) notices.unshift('Para reclutar agentes, inicia el servicio local y pulsa Actualizar.');
+      if (!managedOnline) notices.unshift('To recruit agents, start the local service and select Refresh.');
       note('list-warning', notices.join('\n'));
     } catch (error) {
       if (version !== listVersion) return;
       $('new').disabled = true;
-      if (!hasList) $('count').textContent = 'Lista no disponible';
-      note('list-warning', 'No se pudo actualizar la lista. ' + detail(error));
+      if (!hasList) $('count').textContent = 'Agent list unavailable';
+      note('list-warning', 'Could not refresh the agent list. ' + detail(error));
     } finally {
       if (version === listVersion) $('refresh').disabled = false;
     }
@@ -283,6 +299,7 @@
   function openList() {
     active = null;
     show('roster');
+    note('launch-status', '');
     $('roster-title').focus();
     loadList();
   }
@@ -292,21 +309,21 @@
     show('profile');
     const version = profileVersion;
     const readOnly = !!agent && !agent.managed;
-    const title = agent ? (readOnly ? 'Perfil del agente' : 'Editar agente') : 'Reclutar agente';
+    const title = agent ? (readOnly ? 'Agent profile' : 'Edit agent') : 'Recruit agent';
     $('profile-title').textContent = title;
     $('profile-title').focus();
-    $('profile-back').textContent = agent ? '← Conversación' : '← Agentes';
+    $('profile-back').textContent = agent ? '← Conversation' : '← Agents';
     $('profile-form').hidden = true;
     $('pending-create').hidden = true;
     $('retry-profile').hidden = true;
     note('profile-error', '');
-    note('profile-loading', 'Cargando perfil…');
+    note('profile-loading', 'Loading profile…');
     try {
       let fields = agent;
       if (agent?.managed) {
         fields = await request('agents.profile', { id: agent.id });
         if (!fields || fields.id !== agent.id || typeof fields.instructions !== 'string') {
-          throw new Error('El servicio devolvió un perfil incompleto. Actualiza el servicio local.');
+          throw new Error('The service returned an incomplete profile. Update the local service and try again.');
         }
       } else if (!agent) {
         const storage = window.orca.storage;
@@ -320,7 +337,7 @@
       drawProfile(agent, fields || {}, readOnly);
     } catch (error) {
       if (version !== profileVersion) return;
-      note('profile-error', 'No se pudo cargar el perfil. ' + detail(error));
+      note('profile-error', 'Could not load the profile. ' + detail(error));
       $('retry-profile').hidden = false;
     } finally {
       if (version === profileVersion) note('profile-loading', '');
@@ -335,7 +352,7 @@
     const choices = readOnly ? [] : [...models];
     if (agent && !choices.includes(selected)) choices.push(selected);
     $('agent-model').replaceChildren(...choices.map(model => {
-      const label = !model ? 'Modelo no compartido' : !readOnly && !models.includes(model) ? model + ' (guardado)' : model;
+      const label = !model ? 'Model unavailable' : !readOnly && !models.includes(model) ? model + ' (saved)' : model;
       return new Option(label, model);
     }));
     $('agent-model').value = selected;
@@ -345,9 +362,9 @@
     $('model-hint').hidden = readOnly;
     $('external-note').hidden = !readOnly;
     for (const field of ['agent-name', 'agent-instructions']) $(field).readOnly = readOnly;
-    $('agent-instructions').placeholder = readOnly ? 'El servicio no compartió instrucciones.' : 'Define su tarea y cómo debe responder.';
+    $('agent-instructions').placeholder = readOnly ? 'The service did not provide instructions.' : 'Describe the task and how the agent should respond.';
     $('save').hidden = readOnly;
-    $('save').textContent = agent ? 'Guardar cambios' : 'Reclutar agente';
+    $('save').textContent = agent ? 'Save changes' : 'Recruit agent';
     note('profile-error', '');
     $('pending-create').hidden = !!agent || !createAttempt;
     $('profile-form').hidden = false;
@@ -359,7 +376,7 @@
     const nonce = requestId();
     const next = {
       key: createKeyPrefix + Date.now() + '-' + nonce, fields,
-      id: fields.id || 'agente-' + nonce, requestId: nonce
+      id: fields.id || 'agent-' + nonce, requestId: nonce
     };
     // Record the operation before sending. A lost reply or closed frame can reopen the same intent.
     await window.orca.storage.set(next.key, next);
@@ -380,7 +397,7 @@
       drawProfile(null, {}, false);
       $('agent-name').focus();
     } catch (error) {
-      if (version === profileVersion) note('profile-error', 'No se pudo descartar el reintento. ' + detail(error));
+      if (version === profileVersion) note('profile-error', 'Could not discard the retry. ' + detail(error));
     } finally {
       $('discard-create').disabled = $('save').disabled = false;
     }
@@ -392,7 +409,7 @@
     const name = $('agent-name').value.trim();
     const model = $('agent-model').value.trim();
     if (!name || !model) {
-      note('profile-error', 'Introduce un nombre y un modelo.');
+      note('profile-error', 'Enter a name and select a model.');
       $(name ? 'agent-model' : 'agent-name').focus();
       return;
     }
@@ -413,9 +430,13 @@
         await window.orca.storage.delete(attempt.key);
         createAttempt = null;
       }
-      openChat(agent);
+      if (active) openChat(agent);
+      else {
+        openList();
+        void selectAgent(agent);
+      }
     } catch (error) {
-      note('profile-error', 'No se pudo guardar el agente. ' + detail(error));
+      note('profile-error', 'Could not save the agent. ' + detail(error));
       $('pending-create').hidden = !!active || !createAttempt;
     } finally {
       profileSaving = false;
@@ -446,15 +467,38 @@
     } catch { /* The in-memory copy remains valid while the panel is open. */ }
   }
 
-  function openChat(agent) {
+  async function selectAgent(agent, reviewId) {
+    if (!agent.managed) return openChat(agent);
+    if (view !== 'roster') return;
+    const version = ++selectionVersion;
+    launchReview = null;
+    $('new-native').hidden = true;
+    note('launch-status', 'Opening Orca Chat for ' + agent.name + '…');
+    try {
+      const params = { id: agent.id };
+      if (reviewId) Object.assign(params, { newChat: true, reviewId });
+      const result = await request('chat.openNative', params);
+      if (version !== selectionVersion) return;
+      note('launch-status', result.message);
+      if (result.status === 'needsReview' && result.reviewId) {
+        launchReview = { agent, reviewId: result.reviewId };
+        $('new-native').hidden = false;
+      }
+    } catch (error) {
+      if (version === selectionVersion) openChat(agent, detail(error));
+    }
+  }
+
+  function openChat(agent, launchError = '') {
     active = agent;
     show('conversation');
+    note('launch-error', launchError);
     history = null;
     historyError = '';
     messageSignature = undefined;
     $('chat-title').textContent = agent.name || agent.id;
-    $('chat-id').textContent = agent.id + ' · ' + (agent.managed ? 'Administrado' : 'Externo');
-    $('edit').textContent = agent.managed ? 'Editar' : 'Ver perfil';
+    $('chat-id').textContent = agent.id + ' · ' + (agent.managed ? 'Managed' : 'External');
+    $('edit').textContent = agent.managed ? 'Edit' : 'View profile';
     $('prompt').value = pendingFor(agent.id)?.text || drafts.get(agent.id) || '';
     $('chat-title').focus();
     drawChat();
@@ -464,7 +508,7 @@
   function messageRow(role, text) {
     const item = document.createElement('li');
     item.className = role === 'user' ? 'message user' : 'message';
-    const author = role === 'user' ? 'Tú' : role === 'assistant' ? active.name || active.id : role;
+    const author = role === 'user' ? 'You' : role === 'assistant' ? active.name || active.id : role;
     addText(item, 'span', author, 'author');
     addText(item, 'p', text, 'body');
     return item;
@@ -485,7 +529,7 @@
       messageSignature = signature;
     }
     note('chat-empty', !messages.length && !live && !historyError ?
-      (history ? (history.busy ? 'Esperando la respuesta…' : 'La conversación está vacía.') : 'Cargando conversación…') : '');
+      (history ? (history.busy ? 'Waiting for a reply…' : 'Send a message to start the conversation.') : 'Loading conversation…') : '');
     note('chat-error', historyError || history?.error);
     $('retry-read').hidden = !historyError;
     drawComposer();
@@ -506,13 +550,13 @@
     $('pending-actions').hidden = !unresolved || sending;
     $('retry-send').disabled = offline || !!history?.busy;
     $('discard').disabled = sending;
-    let status = 'Ctrl+Enter o ⌘+Enter para enviar.';
-    if (sending) status = 'Enviando…';
-    else if (unresolved) status = unresolved.error || 'Envío pendiente de confirmación. Reintentar conserva el mismo envío.';
-    else if (history?.busy) status = 'El agente está respondiendo…';
-    else if (offline) status = 'El agente está sin conexión. Inicia su servicio y actualiza la lista para enviar.';
-    else if (historyError || !history) status = 'Esperando conexión con el agente.';
-    else if (oversized) status = 'El mensaje supera el límite de envío de Orca. Divídelo en dos mensajes.';
+    let status = 'Ctrl+Enter or ⌘+Enter to send.';
+    if (sending) status = 'Sending…';
+    else if (unresolved) status = unresolved.error || 'Waiting for delivery confirmation. Retry to resend the same message.';
+    else if (history?.busy) status = 'The agent is replying…';
+    else if (offline) status = 'This agent is offline. Start its service and refresh the agent list to send a message.';
+    else if (historyError || !history) status = 'Connecting to the agent…';
+    else if (oversized) status = 'This message exceeds Orca’s size limit. Split it into smaller messages.';
     if ($('send-state').textContent !== status) $('send-state').textContent = status;
   }
 
@@ -527,7 +571,7 @@
       historyError = '';
     } catch (error) {
       if (version !== chatVersion) return;
-      historyError = 'No se pudo actualizar la conversación. ' + detail(error);
+      historyError = 'Could not refresh the conversation. ' + detail(error);
     }
     drawChat();
     pollTimer = setTimeout(readChat, history?.busy && !historyError ? 450 : 3500);
@@ -555,7 +599,7 @@
         history = { ...history, busy: true };
       }
     } catch (error) {
-      setPending(id, { ...operation, error: 'Envío sin confirmar. ' + detail(error) });
+      setPending(id, { ...operation, error: 'Delivery unconfirmed. ' + detail(error) });
     } finally {
       sends.delete(id);
       if (view === 'conversation' && active.id === id) {
@@ -573,6 +617,9 @@
   $('discard-create').addEventListener('click', discardCreate);
   $('retry-profile').addEventListener('click', () => openProfile(active));
   $('chat-back').addEventListener('click', openList);
+  $('new-native').addEventListener('click', () => {
+    if (launchReview) selectAgent(launchReview.agent, launchReview.reviewId);
+  });
   $('edit').addEventListener('click', () => openProfile(active));
   $('retry-read').addEventListener('click', readChat);
   $('retry-send').addEventListener('click', () => sendMessage(true));

@@ -2,15 +2,18 @@
   "manifestVersion": 2,
   "id": "pi-durable",
   "name": "Pi Durable",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "license": "MIT",
   "repository": "https://github.com/gvillarroel/orca-plugins",
-  "description": "Recluta y configura agentes de Pi Durable, conversa con ellos y recupera el historial desde Orca.",
+  "description": "Recruit Pi Durable agents, open them in Orca’s native Pi Chat, and keep their profiles and history locally.",
   "engines": { "orca": ">=1.4.278" },
   "execution": "trusted-worker",
   "pluginApi": 1,
   "main": "worker.mjs",
-  "capabilities": [{ "kind": "settings:own" }, { "kind": "storage:own" }],
+  "capabilities": [
+    { "kind": "settings:own" }, { "kind": "storage:own" }, { "kind": "workspace:read" },
+    { "kind": "agent:read" }, { "kind": "agent:launch" }
+  ],
   "contributes": {
     "panels": [
       { "id": "agents", "title": "Pi Durable", "icon": "bot", "entry": "panel.html", "ui": "html" }
@@ -18,8 +21,8 @@
     "settings": [
       {
         "key": "connectionsFile",
-        "title": "Registro externo",
-        "description": "Ruta absoluta al archivo JSON con las conexiones de tus agentes externos.",
+        "title": "External registry",
+        "description": "Absolute path to the JSON file that lists your external agent services.",
         "type": "string",
         "default": ""
       }

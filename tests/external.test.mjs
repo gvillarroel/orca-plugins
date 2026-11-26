@@ -184,7 +184,7 @@ test('invalid hosts and redirects never receive authentication; response diagnos
   assert.equal(result.warnings.length, 2);
   assert.match(result.warnings[0], /HTTP 307/);
   assert.ok(!JSON.stringify(result).includes('owner-only diagnostic'));
-  await assert.rejects(api.chat({ id: 'external:one/../v1' }), /inválido/);
+  await assert.rejects(api.chat({ id: 'external:one/../v1' }), /Invalid external agent ID/);
 });
 
 test('large external transcripts fit Orca responses and retain the newest public messages', async t => {
@@ -242,7 +242,7 @@ test('large external transcripts fit Orca responses and retain the newest public
   assert.ok(!(await read()).truncated);
 
   snapshot.entries = [{ model: [{ role: 'assistant', content: 'z'.repeat(2 * 1024 * 1024) }] }];
-  await assert.rejects(read(), /supera.*2 MiB/);
+  await assert.rejects(read(), /exceeds the 2 MiB transfer limit/);
   chunked = true;
-  await assert.rejects(read(), /supera.*2 MiB/);
+  await assert.rejects(read(), /exceeds the 2 MiB transfer limit/);
 });

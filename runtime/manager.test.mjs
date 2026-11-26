@@ -196,6 +196,51 @@ function sseResponse(frames) {
   }), { headers: { 'Content-Type': 'text/event-stream' } });
 }
 
+test('native turn receipts recover the full reply by agent and request after restart', async (t) => {
+  const db = await setup(t);
+  await db.manager.create({ id: 'a', name: 'A' });
+  await db.manager.create({ id: 'b', name: 'B' });
+  const text = 'a'.repeat(13000);
+  for (const [id, requestId, message] of [['a', 'one', text], ['b', 'one', 'other'], ['a', 'two', 'newer']]) {
+    await db.manager.send({ id, requestId, text: message });
+    await settled(db.manager, id);
+  }
+  await db.reopen();
+  const first = await db.manager.turn({ id: 'a', requestId: 'one' });
+  assert.equal(first.status, 'done');
+  assert.equal(first.text, 'Demo echo: ' + text);
+  assert.equal((await db.manager.turn({ id: 'b', requestId: 'one' })).text, 'Demo echo: other');
+  await assert.rejects(db.manager.turn({ id: 'b', requestId: 'two' }), { statusCode: 404 });
+});
+
+test('native image input preserves block order and deduplicates retries after restart', async (t) => {
+  let upstream;
+  t.mock.method(globalThis, 'fetch', async (_url, opts) => {
+    upstream = JSON.parse(opts.body);
+    return sseResponse(anthropicStream(upstream.model, 'Received.', 0));
+  });
+  const db = await setup(t, { ANTHROPIC_API_KEY: 'offline-fixture' });
+  const { id } = await db.manager.create({ name: 'Images', model: 'anthropic/claude-sonnet-4-6' });
+  const image = { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jHoAAAAAASUVORK5CYII=' };
+  const input = { id, requestId: 'photo', content: [{ type: 'text', text: 'First' }, image, { type: 'text', text: 'Last' }] };
+  await db.manager.send(input);
+  const chat = await settled(db.manager, id);
+  assert.equal(chat.messages[0].text, 'First[Image]Last');
+  assert.deepEqual(upstream.messages[0].content.map(p => p.type), ['text', 'image', 'text']);
+  assert.equal(upstream.messages[0].content[1].source.data, image.data);
+  await db.reopen();
+  await db.manager.send(input);
+  const answer = await db.manager.turn(input);
+  assert.equal(answer.status, 'done');
+  assert.equal(answer.text, 'Received.');
+  assert.equal(answer.usage.output, 10);
+  await assert.rejects(db.manager.send({ ...input, content: [image] }), { statusCode: 409 });
+  await assert.rejects(db.manager.send({ ...input, text: 'FirstLast', content: undefined }), { statusCode: 409 });
+  const demo = await db.manager.create({ name: 'Text' });
+  await assert.rejects(db.manager.send({ ...input, id: demo.id }), { statusCode: 422 });
+  await assert.rejects(db.manager.send({ ...input, requestId: 'bad', content: Array(5).fill(image) }), { statusCode: 400 });
+});
+
 for (const [model, events, keyName] of [
   ['openai/gpt-4.1-mini', openaiStream, 'OPENAI_API_KEY'],
   ['anthropic/claude-sonnet-4-6', anthropicStream, 'ANTHROPIC_API_KEY'],

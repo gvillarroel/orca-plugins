@@ -49,13 +49,13 @@ test('cursors are specific to an open panel and invalidated by its next refresh'
   const other = await list({}, b);
   assert.notEqual(first.nextCursor, other.nextCursor);
   for (const cursor of [other.nextCursor, 'garbage', {}, first.nextCursor.replace(':200', ':1')]) {
-    await assert.rejects(list({ cursor }, a), /Actualiza/);
+    await assert.rejects(list({ cursor }, a), /Refresh/);
   }
   await list({}, a);
-  await assert.rejects(list({ cursor: first.nextCursor }, a), /Actualiza/);
+  await assert.rejects(list({ cursor: first.nextCursor }, a), /Refresh/);
   assert.equal((await list({ cursor: other.nextCursor }, b)).agents[0].id, '200');
   t.mock.timers.tick(120001);
-  await assert.rejects(list({ cursor: other.nextCursor }, b), /Actualiza/);
+  await assert.rejects(list({ cursor: other.nextCursor }, b), /Refresh/);
 });
 
 test('a slow refresh cannot overwrite a newer snapshot for the same panel', async () => {
@@ -70,6 +70,6 @@ test('a slow refresh cannot overwrite a newer snapshot for the same panel', asyn
   const slow = list({}, panel);
   const current = await list({}, panel);
   complete({ agents: [] });
-  await assert.rejects(slow, /Actualiza/);
+  await assert.rejects(slow, /Refresh/);
   assert.equal((await list({ cursor: current.nextCursor }, panel)).agents[0].id, 'new-200');
 });

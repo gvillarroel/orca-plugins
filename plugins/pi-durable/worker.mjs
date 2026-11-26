@@ -1,43 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { createExternalRegistry } from './external.mjs';
+import { callLocal } from './local-client.mjs';
+import { createNativeChatHandler } from './native-chat.mjs';
 
-const offline = 'Inicia el servicio de Pi Durable con npm start desde la carpeta runtime del repositorio.';
-
-export async function callLocal(method, params, {
-  dataDir = join(homedir(), '.pi-durable-orca'),
-  signal,
-} = {}) {
-  let connection;
-  try {
-    connection = JSON.parse(await readFile(join(dataDir, 'connection.json'), 'utf8'));
-  } catch {
-    throw new Error(offline);
-  }
-  if (!Number.isInteger(connection.port) || connection.port < 1 || connection.port > 65535 ||
-      typeof connection.token !== 'string' || !/^[0-9a-f]{64}$/.test(connection.token)) {
-    throw new Error('Conexión local inválida. Reinicia el servicio de Pi Durable.');
-  }
-  const timeout = AbortSignal.timeout(10000);
-  let response;
-  try {
-    response = await fetch('http://127.0.0.1:' + connection.port + '/' + method, {
-      method: 'POST',
-      redirect: 'error',
-      headers: { Authorization: 'Bearer ' + connection.token, 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-    });
-  } catch (error) {
-    if (signal?.aborted || timeout.aborted) throw new Error('Se agotó el tiempo de espera del servicio local.');
-    throw new Error(offline);
-  }
-  const result = await response.json();
-  if (!response.ok) throw Object.assign(new Error(result.error || 'El servicio local rechazó la solicitud.'), { status: response.status });
-  return result;
-}
+export { callLocal } from './local-client.mjs';
 
 function receiptKey(id, file) {
   return 'receipt-' + createHash('sha256').update(file + '\n' + id).digest('hex');
@@ -73,7 +39,7 @@ export function createRosterHandler(load) {
   }
   return async (params, { panel, signal }) => {
     const panelId = panel.id;
-    const expired = 'La página de agentes ya no está disponible. Actualiza la lista.';
+    const expired = 'This page of agents has expired. Refresh the list.';
     if (params?.cursor !== undefined) {
       const snapshot = snapshots.get(panelId);
       const cursor = params.cursor;
@@ -128,24 +94,31 @@ export default function activate(orca) {
     const managedOnline = local.status === 'fulfilled';
     return { agents, warnings, managedOnline, models: managedOnline ? (local.value.models ?? ['demo']) : [] };
   }));
-  orca.panels.handle('agents.profile', async ({ id }, { signal }) => {
+  async function profile({ id }, { signal }) {
     try {
       return await callLocal('agents.profile', { id }, { signal });
     } catch (error) {
       // The 0.1.0 service shipped full profiles in its list and had no profile route.
-      if (error.status !== 404 || error.message !== 'Operación desconocida.') throw error;
+      const missingRoute = error.code === 'unknown_operation' || error.message === 'Operación desconocida.';
+      if (error.status !== 404 || !missingRoute) throw error;
       const { agents } = await callLocal('agents.list', {}, { signal });
       const profile = agents.find(agent => agent.id === id);
-      if (!profile) throw new Error('Agente no encontrado.');
+      if (!profile) throw new Error('Agent not found.');
       return profile;
     }
+  }
+  orca.panels.handle('agents.profile', profile);
+  const openNative = createNativeChatHandler(orca);
+  orca.panels.handle('chat.openNative', async ({ id, newChat, reviewId }, context) => {
+    const agent = await profile({ id }, context);
+    return openNative(agent, { newChat: newChat === true, reviewId });
   });
   for (const name of ['agents.create', 'agents.update', 'chat.read', 'chat.send']) {
     orca.panels.handle(name, async (params, { signal }) => {
-      if (!params || typeof params !== 'object') throw new Error('Faltan los parámetros.');
+      if (!params || typeof params !== 'object') throw new Error('Missing request parameters.');
       if (!String(params.id ?? '').startsWith('external:')) return callLocal(name, params, { signal });
       if (name !== 'chat.read' && name !== 'chat.send') {
-        throw new Error('Edita la configuración de este agente en su servicio de origen.');
+        throw new Error('Edit this agent in the service that manages it.');
       }
       const { registry, file } = await external();
       const key = receiptKey(params.id, file);

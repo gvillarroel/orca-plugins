@@ -8,6 +8,7 @@ import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/provid
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 import { configure, createRegistry, defineDoc, Harness, InboxDoc, LiveDoc } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
+import { acceptNativeResults, cancelNativeTurn, nativeContext, nativeExtension, pendingNativeRound, prepareNativeInput } from './native-tools.mjs';
 
 const rosterDoc = defineDoc({
   kind: 'orca.agent-roster', version: 1, scope: 'conversation', history: 'latest', fork: 'initial',
@@ -52,6 +53,46 @@ function textContent(content) {
   return (content ?? []).filter((part) => part.type === 'text').map((part) => part.text).join('');
 }
 
+function userInput(text, content) {
+  if (content === undefined) return string(text, 'Message', 32000);
+  if (text !== undefined || !Array.isArray(content) || !content.length || content.length > 32) {
+    throw invalid('Supply either a text message or up to 32 ordered text and image blocks.');
+  }
+  let images = 0;
+  let bytes = 0;
+  let characters = 0;
+  const blocks = content.map((part) => {
+    if (part?.type === 'text' && typeof part.text === 'string') {
+      characters += part.text.length;
+      return { type: 'text', text: part.text };
+    }
+    if (part?.type !== 'image' || !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(part.mimeType) ||
+        typeof part.data !== 'string' || !part.data.length || part.data.length % 4 !== 0 ||
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(part.data)) {
+      throw invalid('Use text or a PNG, JPEG, WebP or GIF image encoded as base64.');
+    }
+    images++;
+    bytes += Buffer.byteLength(part.data, 'base64');
+    return { type: 'image', mimeType: part.mimeType, data: part.data };
+  });
+  if (images > 4 || bytes > 8 * 1024 * 1024 || characters > 32000) {
+    throw invalid('A message supports 32,000 characters and up to four images totaling 8 MiB.');
+  }
+  return images ? blocks : string(textContent(blocks), 'Message', 32000);
+}
+
+function sameInput(original, input) {
+  if (typeof input === 'string') {
+    return (typeof original === 'string' || original.every((part) => part.type === 'text')) &&
+      textContent(original) === input;
+  }
+  return Array.isArray(original) && original.length === input.length && input.every((part, index) => {
+    const saved = original[index];
+    return saved.type === part.type && (part.type === 'text' ? saved.text === part.text :
+      saved.data === part.data && saved.mimeType === part.mimeType);
+  });
+}
+
 function clip(text, limit) {
   if (text.length <= limit) return text;
   // Avoid splitting a UTF-16 surrogate pair at the display boundary.
@@ -65,7 +106,8 @@ async function chatSnapshot(tx, conversationId) {
   const result = { messages: [], busy: Boolean(live.run || inbox.items.length) };
   let bytes = 0;
   function appendNewest(role, content) {
-    const original = textContent(content);
+    const original = role === 'user' && Array.isArray(content) ?
+      content.map((part) => part.type === 'image' ? '[Image]' : part.text || '').join('') : textContent(content);
     if (!original) return true;
     const text = clip(original, 12000);
     const size = Buffer.byteLength(JSON.stringify({ role, text })) + 1;
@@ -139,7 +181,7 @@ function modelRef(model, models) {
   return { provider, modelId };
 }
 
-export async function openManager({ dataDir, env = process.env }) {
+export async function openManager({ dataDir, env = process.env, now = Date.now }) {
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   const models = createModels({ authContext: {
     env: async (name) => env[name],
@@ -149,8 +191,10 @@ export async function openManager({ dataDir, env = process.env }) {
   models.setProvider(anthropicProvider());
   models.setProvider(demoProvider());
   const storage = await openNodeSqliteStorage(join(dataDir, 'agents.sqlite'));
+  const registry = createRegistry();
+  registry.install(nativeExtension);
   const harness = await Harness.open(storage, {
-    models, registry: createRegistry(), settings: { afterFailedRun: 'continue' },
+    models, registry, now, settings: { afterFailedRun: 'continue', extensions: [] },
   }, context);
   let root;
   try {
@@ -177,6 +221,12 @@ export async function openManager({ dataDir, env = process.env }) {
     const { conversationId } = findProfile(await profiles(), id);
     return harness.conversation(conversationId, context);
   };
+  function redactError(message) {
+    for (const key of Object.values(keys)) {
+      if (env[key]) message = message.replaceAll(env[key], '[redacted]');
+    }
+    return message;
+  }
 
   return {
     availableModels,
@@ -250,34 +300,75 @@ export async function openManager({ dataDir, env = process.env }) {
       const conv = await conversationFor(id);
       // Read the transcript, queued inputs and live response at one commit boundary.
       const result = await conv.commit((tx) => chatSnapshot(tx, conv.id), context);
-      if (result.error) {
-        for (const name of Object.values(keys)) {
-          if (env[name]) result.error = result.error.replaceAll(env[name], '[redacted]');
-        }
-      }
+      if (result.error) result.error = redactError(result.error);
       return result;
     },
 
-    async send({ id, text, requestId }) {
-      string(text, 'Message', 32000);
+    async turn({ id, requestId }) {
+      string(requestId, 'Request ID', 160);
+      const conv = await conversationFor(id);
+      return conv.commit(async (tx) => {
+        const input = await tx.submissionByRequest(conv.id, requestId);
+        if (input?.type !== 'input') throw invalid('Message not found.', 404);
+        if (input.status === 'unanswered') {
+          const detail = typeof input.detail === 'string' ? input.detail : input.reason;
+          return { status: 'error', error: clip(redactError(detail), 2000) };
+        }
+        if (input.status === 'done') {
+          const answer = await tx.entry(input.answer);
+          const message = answer?.model?.find((item) => item.role === 'assistant');
+          if (!message) return { status: 'error', error: 'The saved reply is unavailable.' };
+          return { status: 'done', text: textContent(message.content), usage: message.usage };
+        }
+        if (input.status === 'placed') {
+          const round = await pendingNativeRound(tx, conv.id, input, now());
+          if (round) return round;
+          const live = await tx.doc(LiveDoc, conv.id);
+          if (live.run?.inputs.includes(input.id)) {
+            const text = textContent(live.generation?.message?.content);
+            if (text) return { status: 'pending', text };
+          }
+        }
+        return { status: 'pending' };
+      }, context);
+    },
+
+    async toolResults({ id, requestId, results }) {
+      string(requestId, 'Request ID', 160);
+      const conv = await conversationFor(id);
+      return conv.commit((tx) => acceptNativeResults(tx, conv.id, requestId, results, now()), context);
+    },
+
+    async cancel({ id, requestId }) {
+      string(requestId, 'Request ID', 160);
+      return cancelNativeTurn(harness, await conversationFor(id), requestId, context);
+    },
+
+    async send({ id, text, content, requestId, nativeTools, nativeSystem }) {
+      const input = userInput(text, content);
+      const grant = nativeContext(nativeTools, nativeSystem);
       string(requestId, 'Request ID', 160);
       const conv = await conversationFor(id);
       await conv.commit(async (tx) => {
         const existing = await tx.submissionByRequest(conv.id, requestId);
+        await prepareNativeInput(tx, conv.id, grant, requestId, existing);
         if (existing) {
           const original = existing.entry === undefined
             ? (await tx.doc(InboxDoc, conv.id)).items.find((item) => item.id === existing.id)?.content
             : (await tx.entry(existing.entry))?.model?.[0]?.content;
-          if (original !== undefined && textContent(original) !== text) {
+          if (original !== undefined && !sameInput(original, input)) {
             throw invalid('This request ID was already used for a different message.', 409);
           }
           return;
         }
         const profile = findProfile(await tx.doc(rosterDoc, root.id), id);
-        const { provider } = modelRef(profile.model, models);
+        const { provider, modelId } = modelRef(profile.model, models);
+        if (Array.isArray(input) && (profile.model === 'demo' || !models.getModel(provider, modelId)?.input.includes('image'))) {
+          throw invalid('This agent’s model accepts text only.', 422);
+        }
         const key = keys[provider];
         if (key && !env[key]?.trim()) throw invalid(`Set ${key} in the helper environment and restart it before sending.`, 422);
-        await conv.submit(tx, { type: 'input', content: text, requestId });
+        await conv.submit(tx, { type: 'input', content: input, requestId });
       }, context);
       return { accepted: true };
     },
