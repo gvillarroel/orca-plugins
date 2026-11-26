@@ -4,26 +4,9 @@
 
 ## Instalar Pi Durable
 
-La integración se probó con Orca Desktop 1.4.278 para Windows, Node.js 24 y Pi Coding Agent 1.4.0. Necesitas también npm y Git.
+**[Guía de instalación en Windows](docs/instalacion.md)**. Explica cómo añadir el catálogo a tu perfil habitual de Orca, instalar Pi Durable, iniciar su servicio local y comprobar el primer chat con el modelo `demo`. También incluye el comando para volver a iniciar el servicio después de reiniciar Windows.
 
-1. Si aún no tienes Pi, ejecuta `npm install -g @earendil-works/pi-coding-agent@1.4.0`. Comprueba que Pi aparece en **Settings → Agents** de Orca.
-2. Descarga la versión, registra el proveedor local en Pi e inicia el servicio.
-
-   ```sh
-   git clone --branch pi-durable-v0.3.0 https://github.com/gvillarroel/orca-plugins.git
-   cd orca-plugins
-   pi install ./integrations/pi-durable-provider
-   cd runtime
-   npm ci
-   npm start
-   ```
-
-   Conserva la carpeta en esa ubicación y deja el servicio en ejecución mientras usas tus agentes.
-
-3. Añade el catálogo `https://github.com/gvillarroel/orca-plugins.git`, ref `main`, en **Settings → Plugins**. Instala **Pi Durable** y revisa los permisos de Orca.
-4. Abre un workspace local y selecciona **Pi Durable → + Recruit** en la barra derecha. Escribe un nombre y elige `demo`. Al guardar, escribe un mensaje en la pestaña central. El modelo de demostración devuelve un eco local.
-
-Si ya tienes Pi Durable, actualiza el servicio local, el proveedor de Pi y el plugin de Orca. El servicio vuelve a abrir tu base de datos. [Actualizar una instalación anterior](plugins/pi-durable/README.md#upgrade-an-existing-installation)
+Para encontrar los plugins de este repositorio, abre **Settings → Plugins → … → Catalog sources…**. Añade `https://github.com/gvillarroel/orca-plugins.git` con la rama `main`. El catálogo aparecerá como **Orca Plugins**. [Actualizar una instalación anterior de Pi Durable](plugins/pi-durable/README.md#upgrade-an-existing-installation)
 
 En una pestaña nativa puedes mencionar archivos con `@`. Con un perfil que admite herramientas, Pi puede leer un archivo del workspace y Orca muestra la operación junto a la respuesta. [Captura de la lectura en Orca](docs/pi-durable/native-tool.png)
 
